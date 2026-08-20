@@ -1,0 +1,41 @@
+import { Routes, Route, Navigate } from 'react-router-dom'
+import NavBar from './components/NavBar'
+import HomePage from './pages/HomePage'
+import ConcertDetailPage from './pages/ConcertDetailPage'
+import AuthPage from './pages/AuthPage'
+import BookingsPage from './pages/BookingsPage'
+import ChatPage from './pages/ChatPage'
+import { api } from './lib/api'
+
+function RequireAuth({ children }) {
+  return api.isLoggedIn() ? children : <Navigate to="/login" replace />
+}
+
+export default function App() {
+  return (
+    <div className="min-h-screen bg-void">
+      <NavBar />
+      <Routes>
+        <Route path="/" element={<HomePage />} />
+        <Route path="/concerts/:eventId" element={<ConcertDetailPage />} />
+        <Route path="/login" element={<AuthPage />} />
+        <Route
+          path="/bookings"
+          element={
+            <RequireAuth>
+              <BookingsPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/chat"
+          element={
+            <RequireAuth>
+              <ChatPage />
+            </RequireAuth>
+          }
+        />
+      </Routes>
+    </div>
+  )
+}
