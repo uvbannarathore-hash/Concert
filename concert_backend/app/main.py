@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routes import auth_routes, chat_routes, concert_routes, booking_routes
+from app.routes import auth_routes, chat_routes, concert_routes, booking_routes, admin_routes, wishlist_routes
 
 app = FastAPI(title="Concert Booking Assistant API")
 
@@ -18,6 +18,8 @@ app.include_router(auth_routes.router)
 app.include_router(chat_routes.router)
 app.include_router(concert_routes.router)
 app.include_router(booking_routes.router)
+app.include_router(admin_routes.router)
+app.include_router(wishlist_routes.router)
 
 
 @app.get("/")

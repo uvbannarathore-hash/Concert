@@ -11,6 +11,7 @@ class CreateBookingRequest(BaseModel):
     event_id: str
     category: str
     seats: int
+    payment_method: str = "Card"  # 'Card', 'UPI', 'Wallet' - dummy, not verified
 
 
 @router.post("")
@@ -23,6 +24,8 @@ def create_booking(payload: CreateBookingRequest, current_user: dict = Depends(g
     1. Check seat availability for the requested category.
     2. Insert the booking row (linked to the REAL user_id).
     3. Decrement available_seats.
+    4. Record a dummy payment (no real gateway - this is a simulated
+       transaction so the flow feels complete end-to-end).
 
     NOTE: For true race-condition safety (two users booking the last
     seat at the same time), this logic should eventually move into a
@@ -45,6 +48,7 @@ def create_booking(payload: CreateBookingRequest, current_user: dict = Depends(g
         raise HTTPException(status_code=400, detail="Not enough seats available")
 
     booking_id = f"BK{int(time.time() * 1000)}"
+    amount = float(ticket_row["price_inr"]) * payload.seats
 
     supabase_admin.table("bookings").insert(
         {
@@ -61,7 +65,24 @@ def create_booking(payload: CreateBookingRequest, current_user: dict = Depends(g
         {"available_seats": ticket_row["available_seats"] - payload.seats}
     ).eq("event_id", payload.event_id).eq("category", payload.category).execute()
 
-    return {"message": "Booking confirmed", "booking_id": booking_id}
+    payment_id = f"PAY{int(time.time() * 1000)}"
+    supabase_admin.table("payments").insert(
+        {
+            "payment_id": payment_id,
+            "booking_id": booking_id,
+            "user_id": current_user["user_id"],
+            "amount": amount,
+            "method": payload.payment_method,
+            "status": "Success",
+        }
+    ).execute()
+
+    return {
+        "message": "Booking confirmed",
+        "booking_id": booking_id,
+        "payment_id": payment_id,
+        "amount": amount,
+    }
 
 
 @router.get("/me")

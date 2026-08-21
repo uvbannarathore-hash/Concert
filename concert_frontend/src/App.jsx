@@ -5,6 +5,8 @@ import ConcertDetailPage from './pages/ConcertDetailPage'
 import AuthPage from './pages/AuthPage'
 import BookingsPage from './pages/BookingsPage'
 import ChatPage from './pages/ChatPage'
+import AdminPage from './pages/AdminPage'
+import WishlistPage from './pages/WishlistPage'
 import { api } from './lib/api'
 
 function RequireAuth({ children }) {
@@ -32,6 +34,22 @@ export default function App() {
           element={
             <RequireAuth>
               <ChatPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/admin"
+          element={
+            <RequireAuth>
+              <AdminPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/wishlist"
+          element={
+            <RequireAuth>
+              <WishlistPage />
             </RequireAuth>
           }
         />

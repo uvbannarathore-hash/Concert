@@ -73,8 +73,13 @@ export const api = {
   isLoggedIn: () => !!getToken(),
   currentEmail: () => localStorage.getItem('email'),
 
-  listConcerts: (city) =>
-    request(`/concerts${city ? `?city=${encodeURIComponent(city)}` : ''}`),
+  listConcerts: (city, eventType) => {
+    const params = new URLSearchParams()
+    if (city) params.set('city', city)
+    if (eventType) params.set('event_type', eventType)
+    const qs = params.toString()
+    return request(`/concerts${qs ? `?${qs}` : ''}`)
+  },
 
   getConcert: (eventId) => request(`/concerts/${eventId}`),
 
@@ -87,9 +92,19 @@ export const api = {
 
   myBookings: () => request('/bookings/me', { auth: true }),
 
-  createBooking: (event_id, category, seats) =>
-    request('/bookings', { method: 'POST', auth: true, body: { event_id, category, seats } }),
+  createBooking: (event_id, category, seats, payment_method) =>
+    request('/bookings', { method: 'POST', auth: true, body: { event_id, category, seats, payment_method } }),
 
   cancelBooking: (bookingId) =>
     request(`/bookings/${bookingId}/cancel`, { method: 'POST', auth: true }),
+
+  myProfile: () => request('/auth/me', { auth: true }),
+
+  getWishlist: () => request('/wishlist', { auth: true }),
+
+  addToWishlist: (eventId) =>
+    request('/wishlist', { method: 'POST', auth: true, body: { event_id: eventId } }),
+
+  removeFromWishlist: (eventId) =>
+    request(`/wishlist/${eventId}`, { method: 'DELETE', auth: true }),
 }
