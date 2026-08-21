@@ -53,6 +53,14 @@ export default function HomePage() {
             Tickets for the artists your group chat won't stop talking about.
             Book in seconds, ask our assistant anything.
           </p>
+          <a
+          href="https://t.me/Apra_shaktibot?text=Hi%20Apra%2C%20I%20want%20help%20with%20booking%20tickets."
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-2 mt-6 px-6 py-3 rounded-full bg-spot2 text-void font-bold font-body border border-spot2 hover:scale-105 transition-transform"
+>
+          💬 Chat with Apra on Telegram
+          </a>
         </div>
       </section>
 

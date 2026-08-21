@@ -19,9 +19,10 @@ export default function AdminPage() {
   const [bookings, setBookings] = useState([])
 
   const [chatMessages, setChatMessages] = useState([
-    { role: 'assistant', text: "I'm your admin assistant. Ask me to create, update, cancel, or delete events, check seat availability, or pull revenue reports." },
+    { role: 'assistant', text: "I'm your admin assistant. Ask me to create, update, cancel, or delete events, check seat availability, or pull revenue reports. You can also attach an image (📎) when creating or updating an event to set its poster." },
   ])
   const [chatInput, setChatInput] = useState('')
+  const [chatImage, setChatImage] = useState(null)
   const [chatSending, setChatSending] = useState(false)
 
   function flash(setter, text) {
@@ -64,19 +65,22 @@ export default function AdminPage() {
     const text = chatInput.trim()
     if (!text || chatSending) return
 
-    setChatMessages((m) => [...m, { role: 'user', text }])
+    setChatMessages((m) => [...m, { role: 'user', text: chatImage ? `${text} 📎 ${chatImage.name}` : text }])
     setChatInput('')
     setChatSending(true)
     setError('')
 
+    const imageToSend = chatImage
+
     try {
-      const res = await adminApi.chat(text)
+      const res = await adminApi.chat(text, imageToSend)
       setChatMessages((m) => [...m, { role: 'assistant', text: res.reply }])
     } catch (err) {
       if (err.message.includes('403')) setForbidden(true)
       setChatMessages((m) => [...m, { role: 'assistant', text: `Error: ${err.message}` }])
     } finally {
       setChatSending(false)
+      setChatImage(null)
     }
   }
 
@@ -154,6 +158,20 @@ export default function AdminPage() {
               </div>
             )}
           </div>
+
+          {chatImage && (
+            <div className="flex items-center gap-2 mb-2 text-xs text-haze bg-stage2 border border-edge rounded-lg px-3 py-2 w-fit">
+              <span>📎 {chatImage.name}</span>
+              <button
+                type="button"
+                onClick={() => setChatImage(null)}
+                className="text-spot hover:underline"
+              >
+                Remove
+              </button>
+            </div>
+          )}
+
           <form onSubmit={handleAdminChatSend} className="flex gap-2">
             <input
               className="field"
@@ -161,6 +179,15 @@ export default function AdminPage() {
               onChange={(e) => setChatInput(e.target.value)}
               placeholder='e.g. "Create a Diljit Dosanjh concert in Pune on 10 Nov, 8 PM"'
             />
+            <label className="btn-spot !px-3 cursor-pointer flex items-center" title="Attach event poster image">
+              📎
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => setChatImage(e.target.files[0] || null)}
+              />
+            </label>
             <button type="submit" disabled={chatSending} className="btn-spot !px-6">
               Send
             </button>

@@ -17,8 +17,11 @@ export default function ConcertCard({ event, wishlisted = false, onWishlistChang
   async function toggleWishlist(e) {
     e.preventDefault()
     e.stopPropagation()
+
     if (!api.isLoggedIn() || busy) return
+
     setBusy(true)
+
     try {
       if (saved) {
         await api.removeFromWishlist(event.event_id)
@@ -27,6 +30,7 @@ export default function ConcertCard({ event, wishlisted = false, onWishlistChang
         await api.addToWishlist(event.event_id)
         setSaved(true)
       }
+
       onWishlistChange?.()
     } catch {
       // silent - wishlist toggle failing isn't critical enough to interrupt browsing
@@ -41,25 +45,53 @@ export default function ConcertCard({ event, wishlisted = false, onWishlistChang
       className="group block rounded-2xl border border-edge bg-stage overflow-hidden
                  hover:border-spot/50 hover:-translate-y-1 transition-all duration-300 relative"
     >
-      <div className="h-36 bg-gradient-to-br from-stage2 to-void relative flex items-end justify-between p-5">
+      {/* Image */}
+      <div className="h-48 relative overflow-hidden">
+        {event.image_url ? (
+          <img
+            src={event.image_url}
+            alt={event.artist_name || 'Event'}
+            className="absolute inset-0 w-full h-full object-cover object-top
+                       group-hover:scale-105 transition-transform duration-500"
+            onError={(e) => {
+              e.currentTarget.style.display = 'none'
+            }}
+          />
+        ) : (
+          <div className="absolute inset-0 bg-gradient-to-br from-stage2 to-void" />
+        )}
+
+        {/* Dark overlay */}
+        <div className="absolute inset-0 bg-gradient-to-t from-void/80 via-void/20 to-transparent" />
+
+        {/* Hover glow */}
         <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 bg-spot-radial" />
-        <span className="relative text-[11px] font-mono uppercase tracking-wider px-2.5 py-1 rounded-full border border-spot2/40 text-spot2 bg-spot2/10">
+
+        {/* Event type */}
+        <span className="absolute left-5 bottom-5 z-10 text-[11px] font-mono uppercase tracking-wider px-2.5 py-1 rounded-full border border-spot2/40 text-spot2 bg-spot2/10 backdrop-blur-sm">
           {event.event_type || 'Concert'}
         </span>
-        <span className={`relative text-[11px] font-mono uppercase tracking-wider px-2.5 py-1 rounded-full border ${style}`}>
+
+        {/* Status */}
+        <span
+          className={`absolute right-5 bottom-5 z-10 text-[11px] font-mono uppercase tracking-wider px-2.5 py-1 rounded-full border ${style} backdrop-blur-sm`}
+        >
           {event.status}
         </span>
 
+        {/* Wishlist */}
         {api.isLoggedIn() && (
           <button
             onClick={toggleWishlist}
             aria-label={saved ? 'Remove from wishlist' : 'Add to wishlist'}
-            className="absolute top-3 right-3 z-10 w-8 h-8 rounded-full bg-void/70 backdrop-blur
+            className="absolute top-3 right-3 z-20 w-8 h-8 rounded-full bg-void/70 backdrop-blur
                        flex items-center justify-center hover:scale-110 transition disabled:opacity-50"
             disabled={busy}
           >
             <svg
-              width="16" height="16" viewBox="0 0 24 24"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
               fill={saved ? '#FF3D6E' : 'none'}
               stroke={saved ? '#FF3D6E' : '#8B87A0'}
               strokeWidth="2"
@@ -69,11 +101,17 @@ export default function ConcertCard({ event, wishlisted = false, onWishlistChang
           </button>
         )}
       </div>
+
+      {/* Event details */}
       <div className="p-5">
         <h3 className="font-display text-2xl leading-none tracking-wide mb-2">
           {event.artist_name}
         </h3>
-        <p className="text-sm text-haze mb-3">{event.venue_name}, {event.city}</p>
+
+        <p className="text-sm text-haze mb-3">
+          {event.venue_name}, {event.city}
+        </p>
+
         <div className="flex items-center justify-between text-xs font-mono text-haze border-t border-edge pt-3">
           <span>{event.event_date}</span>
           <span>{event.event_time}</span>

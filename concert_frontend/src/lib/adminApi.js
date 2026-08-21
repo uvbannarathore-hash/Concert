@@ -37,5 +37,34 @@ export const adminApi = {
     adminRequest(`/admin/ticket-categories/${eventId}/${category}`, { method: 'PATCH', body: { price_inr } }),
   allBookings: () => adminRequest('/admin/bookings'),
   listConcerts: () => api.listConcerts(),
-  chat: (message) => adminRequest('/admin/agent-chat', { method: 'POST', body: { message } }),
+
+  // Chat now supports an optional image file (e.g. event poster).
+  // Uses multipart/form-data instead of JSON, since it may carry a binary file.
+  chat: async (message, imageFile) => {
+    const token = localStorage.getItem('access_token')
+    if (!token) throw new Error('Not logged in')
+
+    const formData = new FormData()
+    formData.append('message', message)
+    if (imageFile) formData.append('image', imageFile)
+
+    const res = await fetch(`${BASE_URL}/admin/agent-chat`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        // Do NOT set Content-Type manually - the browser sets the correct
+        // multipart/form-data boundary automatically when body is FormData.
+      },
+      body: formData,
+    })
+
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      const message = data.detail
+        ? typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)
+        : `Request failed (${res.status})`
+      throw new Error(message)
+    }
+    return data
+  },
 }

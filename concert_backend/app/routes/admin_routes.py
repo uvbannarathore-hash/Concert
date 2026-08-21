@@ -1,6 +1,6 @@
 import time
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from app.admin_auth import get_current_admin
 from app.supabase_client import supabase_admin
@@ -11,12 +11,12 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 # ---------- Admin AI Assistant ----------
 
-class AdminChatRequest(BaseModel):
-    message: str
-
-
 @router.post("/agent-chat")
-async def admin_chat(payload: AdminChatRequest, admin=Depends(get_current_admin)):
+async def admin_chat(
+    message: str = Form(...),
+    image: UploadFile = File(None),
+    admin=Depends(get_current_admin),
+):
     """
     Forwards the admin's message to the n8n Admin Assistant webhook.
 
@@ -24,13 +24,55 @@ async def admin_chat(payload: AdminChatRequest, admin=Depends(get_current_admin)
     logged-in admin (is_admin=true) before this function even runs - the
     n8n Admin Assistant workflow itself does not re-check permissions, it
     trusts that this backend route is the only thing allowed to call it.
+
+    If an image is attached (e.g. an event poster), it is uploaded to the
+    Supabase "event-images" storage bucket first, and its public URL is
+    embedded into the message text as "[Uploaded image URL: ...]" before
+    forwarding to n8n. The AI Agent in n8n is instructed to detect this
+    marker and pass the URL along when creating/updating an event.
     """
     if not N8N_ADMIN_WEBHOOK_URL:
-        raise HTTPException(status_code=500, detail="Admin assistant is not configured (N8N_ADMIN_WEBHOOK_URL missing)")
+        raise HTTPException(
+            status_code=500,
+            detail="Admin assistant is not configured (N8N_ADMIN_WEBHOOK_URL missing)",
+        )
+
+    enriched_message = message
+
+    if image is not None:
+        file_bytes = await image.read()
+        # unique filename so re-uploads never collide
+        safe_name = image.filename.replace(" ", "_")
+        filename = f"{int(time.time())}_{safe_name}"
+
+        try:
+            supabase_admin.storage.from_("event-images").upload(
+                path=filename,
+                file=file_bytes,
+                file_options={
+                    "content-type": image.content_type or "application/octet-stream",
+                    "upsert": "true",
+                },
+            )
+            public_url_response = supabase_admin.storage.from_("event-images").get_public_url(filename)
+
+            # supabase-py v2 returns a plain string; older v1 clients sometimes
+            # return a dict like {"publicURL": "..."} - handle both safely.
+            if isinstance(public_url_response, str):
+                public_url = public_url_response
+            elif isinstance(public_url_response, dict):
+                public_url = public_url_response.get("publicURL") or public_url_response.get("publicUrl")
+            else:
+                public_url = str(public_url_response)
+
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Image upload failed: {e}")
+
+        enriched_message = f"{message} [Uploaded image URL: {public_url}]"
 
     body = {
         "admin_user_id": admin["user_id"],
-        "message": payload.message,
+        "message": enriched_message,
     }
 
     async with httpx.AsyncClient(timeout=60.0) as client:
@@ -40,7 +82,21 @@ async def admin_chat(payload: AdminChatRequest, admin=Depends(get_current_admin)
         except httpx.HTTPError as e:
             raise HTTPException(status_code=502, detail=f"Failed to reach admin assistant: {e}")
 
-    return response.json()
+        if not response.text.strip():
+            raise HTTPException(
+                status_code=502,
+                detail="Admin assistant (n8n) returned an empty response. "
+                       "Check that the n8n workflow is Active/Published and that "
+                       "N8N_ADMIN_WEBHOOK_URL points to the production webhook, not the test one.",
+            )
+
+        try:
+            return response.json()
+        except ValueError:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Admin assistant returned invalid JSON: {response.text[:300]}",
+            )
 
 
 # ---------- Events ----------
