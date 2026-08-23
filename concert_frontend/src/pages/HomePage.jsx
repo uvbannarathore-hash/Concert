@@ -34,7 +34,48 @@ export default function HomePage() {
     return 'Good evening'
   }
 
-  const cities = [...new Set(events.map((e) => e.city))]
+  // Only show events that haven't happened yet and aren't cancelled/completed.
+  // This is a safety net on top of the backend's own status updates - even if
+  // an event's status hasn't been flipped to "Completed" yet server-side,
+  // a past date always hides it here immediately.
+  const today = new Date().toISOString().split('T')[0] // "YYYY-MM-DD"
+  const visibleEvents = events.filter(
+    (e) => e.event_date >= today && e.status !== 'Cancelled' && e.status !== 'Completed'
+  )
+
+  const cities = [...new Set(visibleEvents.map((e) => e.city))]
+
+  // Group events that are the same title/artist at the same venue, city,
+  // and date into a single card with multiple showtime buttons - matches
+  // how BookMyShow groups multiple showtimes of the same movie/screen.
+  function groupEvents(list) {
+    const groups = new Map()
+
+    for (const e of list) {
+      const key = `${e.artist_name}|${e.venue_name}|${e.city}|${e.event_date}`
+      if (!groups.has(key)) {
+        groups.set(key, {
+          ...e,
+          showtimes: [],
+        })
+      }
+      groups.get(key).showtimes.push({
+        event_id: e.event_id,
+        event_time: e.event_time,
+        status: e.status,
+      })
+    }
+
+    // Sort showtimes within each group chronologically (simple string sort
+    // works fine for "HH:MM AM/PM" only if consistent format; adjust if needed)
+    for (const g of groups.values()) {
+      g.showtimes.sort((a, b) => a.event_time.localeCompare(b.event_time))
+    }
+
+    return Array.from(groups.values())
+  }
+
+  const groupedEvents = groupEvents(visibleEvents)
 
   return (
     <div>
@@ -119,7 +160,7 @@ export default function HomePage() {
         {loading && <p className="text-haze">Loading shows…</p>}
         {error && <p className="text-spot">{error}</p>}
 
-        {!loading && !error && events.length === 0 && (
+        {!loading && !error && groupedEvents.length === 0 && (
           <div className="text-center py-20 border border-dashed border-edge rounded-2xl">
             <p className="font-display text-2xl mb-2">NOTHING BOOKED HERE YET</p>
             <p className="text-haze">Check back soon, or try a different city.</p>
@@ -127,8 +168,8 @@ export default function HomePage() {
         )}
 
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
-          {events.map((event) => (
-            <ConcertCard key={event.event_id} event={event} />
+          {groupedEvents.map((group) => (
+            <ConcertCard key={`${group.artist_name}|${group.venue_name}|${group.city}|${group.event_date}`} event={group} />
           ))}
         </div>
       </section>

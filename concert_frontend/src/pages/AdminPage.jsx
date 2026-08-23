@@ -18,6 +18,10 @@ export default function AdminPage() {
   const [ticketForm, setTicketForm] = useState(emptyTicket)
   const [bookings, setBookings] = useState([])
 
+  const [showPastEvents, setShowPastEvents] = useState(false)
+  const [pastEvents, setPastEvents] = useState([])
+  const [pastEventsLoading, setPastEventsLoading] = useState(false)
+
   const [chatMessages, setChatMessages] = useState([
     { role: 'assistant', text: "I'm your admin assistant. Ask me to create, update, cancel, or delete events, check seat availability, or pull revenue reports. You can also attach an image (📎) when creating or updating an event to set its poster." },
   ])
@@ -94,9 +98,33 @@ export default function AdminPage() {
       })
   }
 
+  function loadPastEvents() {
+    setPastEventsLoading(true)
+    adminApi
+      .listConcerts()
+      .then((data) => {
+        const today = new Date().toISOString().split('T')[0]
+        const past = (data.events || []).filter(
+          (e) => e.event_date < today || e.status === 'Completed' || e.status === 'Cancelled'
+        )
+        // most recent first
+        past.sort((a, b) => (a.event_date < b.event_date ? 1 : -1))
+        setPastEvents(past)
+      })
+      .catch((err) => {
+        if (err.message.includes('403')) setForbidden(true)
+        setError(err.message)
+      })
+      .finally(() => setPastEventsLoading(false))
+  }
+
   useEffect(() => {
     if (tab === 'bookings') loadBookings()
   }, [tab])
+
+  useEffect(() => {
+    if (tab === 'events' && showPastEvents) loadPastEvents()
+  }, [tab, showPastEvents])
 
   if (forbidden) {
     return (
@@ -196,31 +224,68 @@ export default function AdminPage() {
       )}
 
       {tab === 'events' && (
-        <form onSubmit={handleCreateEvent} className="bg-stage border border-edge rounded-2xl p-6 space-y-4">
-          <h2 className="font-display text-xl tracking-wide mb-2">NEW LISTING</h2>
-          <div>
-            <label className="block text-sm text-haze mb-1.5">Type</label>
-            <select
-              className="field"
-              value={eventForm.event_type}
-              onChange={(e) => setEventForm({ ...eventForm, event_type: e.target.value })}
+        <div className="space-y-6">
+          <form onSubmit={handleCreateEvent} className="bg-stage border border-edge rounded-2xl p-6 space-y-4">
+            <h2 className="font-display text-xl tracking-wide mb-2">NEW LISTING</h2>
+            <div>
+              <label className="block text-sm text-haze mb-1.5">Type</label>
+              <select
+                className="field"
+                value={eventForm.event_type}
+                onChange={(e) => setEventForm({ ...eventForm, event_type: e.target.value })}
+              >
+                {EVENT_TYPES.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            </div>
+            <div className="grid sm:grid-cols-2 gap-4">
+              <Field label={eventForm.event_type === 'Movie' ? 'Movie Title' : 'Artist / Title'} value={eventForm.artist_name} onChange={(v) => setEventForm({ ...eventForm, artist_name: v })} placeholder="Arijit Singh" />
+              <Field label="Artist/Title ID" value={eventForm.artist_id} onChange={(v) => setEventForm({ ...eventForm, artist_id: v })} placeholder="ART01" />
+              <Field label="Venue ID" value={eventForm.venue_id} onChange={(v) => setEventForm({ ...eventForm, venue_id: v })} placeholder="VEN01" />
+              <Field label="Venue Name" value={eventForm.venue_name} onChange={(v) => setEventForm({ ...eventForm, venue_name: v })} placeholder="DY Patil Stadium" />
+              <Field label="City" value={eventForm.city} onChange={(v) => setEventForm({ ...eventForm, city: v })} placeholder="Mumbai" />
+              <Field label="Date" value={eventForm.event_date} onChange={(v) => setEventForm({ ...eventForm, event_date: v })} placeholder="2026-12-20" />
+              <Field label="Time" value={eventForm.event_time} onChange={(v) => setEventForm({ ...eventForm, event_time: v })} placeholder="7:00 PM" />
+            </div>
+            <button type="submit" className="btn-spot">Create event</button>
+          </form>
+
+          {/* Past / Completed events */}
+          <div className="bg-stage border border-edge rounded-2xl p-6">
+            <button
+              type="button"
+              onClick={() => setShowPastEvents((s) => !s)}
+              className="flex items-center justify-between w-full text-left"
             >
-              {EVENT_TYPES.map((t) => (
-                <option key={t} value={t}>{t}</option>
-              ))}
-            </select>
+              <h2 className="font-display text-xl tracking-wide">PAST EVENTS</h2>
+              <span className="text-haze text-sm">{showPastEvents ? 'Hide ▲' : 'Show ▼'}</span>
+            </button>
+
+            {showPastEvents && (
+              <div className="mt-4 space-y-3">
+                {pastEventsLoading && <p className="text-haze text-sm">Loading past events…</p>}
+                {!pastEventsLoading && pastEvents.length === 0 && (
+                  <p className="text-haze text-sm">No past events yet.</p>
+                )}
+                {pastEvents.map((e) => (
+                  <div
+                    key={e.event_id}
+                    className="border border-edge rounded-xl p-4 flex justify-between flex-wrap gap-2"
+                  >
+                    <div>
+                      <p className="font-body font-bold">{e.artist_name}</p>
+                      <p className="text-xs text-haze">
+                        {e.venue_name}, {e.city} · {e.event_date} · {e.event_time}
+                      </p>
+                    </div>
+                    <span className="text-xs font-mono text-haze self-center">{e.status}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
-          <div className="grid sm:grid-cols-2 gap-4">
-            <Field label={eventForm.event_type === 'Movie' ? 'Movie Title' : 'Artist / Title'} value={eventForm.artist_name} onChange={(v) => setEventForm({ ...eventForm, artist_name: v })} placeholder="Arijit Singh" />
-            <Field label="Artist/Title ID" value={eventForm.artist_id} onChange={(v) => setEventForm({ ...eventForm, artist_id: v })} placeholder="ART01" />
-            <Field label="Venue ID" value={eventForm.venue_id} onChange={(v) => setEventForm({ ...eventForm, venue_id: v })} placeholder="VEN01" />
-            <Field label="Venue Name" value={eventForm.venue_name} onChange={(v) => setEventForm({ ...eventForm, venue_name: v })} placeholder="DY Patil Stadium" />
-            <Field label="City" value={eventForm.city} onChange={(v) => setEventForm({ ...eventForm, city: v })} placeholder="Mumbai" />
-            <Field label="Date" value={eventForm.event_date} onChange={(v) => setEventForm({ ...eventForm, event_date: v })} placeholder="2026-12-20" />
-            <Field label="Time" value={eventForm.event_time} onChange={(v) => setEventForm({ ...eventForm, event_time: v })} placeholder="7:00 PM" />
-          </div>
-          <button type="submit" className="btn-spot">Create event</button>
-        </form>
+        </div>
       )}
 
       {tab === 'pricing' && (
