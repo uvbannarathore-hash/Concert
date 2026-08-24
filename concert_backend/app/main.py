@@ -8,7 +8,7 @@ app = FastAPI(title="Concert Booking Assistant API")
 # Tighten allow_origins to your actual frontend URL before going live.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://events-two-phi.vercel.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
