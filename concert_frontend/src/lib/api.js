@@ -1,4 +1,6 @@
-const BASE_URL = 'http://127.0.0.1:8000'
+// In dev, falls back to localhost. In production, set VITE_API_URL in your
+// hosting provider's environment variables to your deployed backend URL.
+const BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
 
 function getToken() {
   return localStorage.getItem('access_token')
