@@ -32,7 +32,7 @@ export default function ProfilePage() {
     setSaving(true)
     try {
       await api.updateProfile({ name, phone, city })
-      setInfo('Profile updated.')
+      setInfo('Profile successfully updated.')
     } catch (err) {
       setError(err.message)
     } finally {
@@ -41,64 +41,83 @@ export default function ProfilePage() {
   }
 
   if (loading) {
-    return <p className="text-haze text-center py-24">Loading profile…</p>
+    return (
+      <div className="max-w-xl mx-auto px-6 py-24 flex justify-center">
+        <div className="space-y-3 text-center">
+          <div className="w-8 h-8 border-4 border-spot border-t-transparent rounded-full animate-spin mx-auto"></div>
+          <p className="text-xs font-mono text-haze">Loading profile data...</p>
+        </div>
+      </div>
+    )
   }
 
   return (
-    <div className="max-w-lg mx-auto px-6 py-14">
-      <p className="eyebrow mb-3">Your account</p>
-      <h1 className="font-display text-4xl tracking-wide mb-8">EDIT PROFILE</h1>
+    <div className="max-w-xl mx-auto px-6 py-12 animate-fade-in-up">
+      <div className="mb-8">
+        <p className="eyebrow mb-1">User account settings</p>
+        <h1 className="font-display text-4xl tracking-wide uppercase text-paper">EDIT PROFILE</h1>
+        <p className="text-xs text-haze mt-1">Configure your personal information and contact details</p>
+      </div>
 
-      <form onSubmit={handleSave} className="bg-stage border border-edge rounded-2xl p-6 space-y-4">
+      <form onSubmit={handleSave} className="glass-card bg-stage/15 border border-white/[0.04] rounded-2xl p-6 space-y-5 shadow-2xl">
         <div>
-          <label className="block text-sm text-haze mb-1.5">Email</label>
-          <input className="field opacity-60" value={email} disabled />
+          <label className="block text-xs font-mono text-haze/60 mb-2 uppercase">Account Email (ReadOnly)</label>
+          <input className="field opacity-40 select-none cursor-not-allowed font-mono text-sm bg-stage2/40" value={email} disabled />
         </div>
 
         <div>
-          <label className="block text-sm text-haze mb-1.5">Name</label>
+          <label className="block text-xs font-mono text-haze/60 mb-2 uppercase">Display Name</label>
           <input
             className="field"
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Your name"
+            required
           />
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm text-haze mb-1.5">Phone</label>
+            <label className="block text-xs font-mono text-haze/60 mb-2 uppercase">Phone Number</label>
             <input
-              className="field"
+              className="field font-mono"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
-              placeholder="98765 43210"
+              placeholder="e.g. 98765 43210"
             />
           </div>
           <div>
-            <label className="block text-sm text-haze mb-1.5">City</label>
+            <label className="block text-xs font-mono text-haze/60 mb-2 uppercase">City</label>
             <input
               className="field"
               value={city}
               onChange={(e) => setCity(e.target.value)}
-              placeholder="Mumbai"
+              placeholder="e.g. Mumbai"
             />
           </div>
         </div>
 
         {error && (
-          <p className="text-sm text-spot bg-spot/10 border border-spot/30 rounded-lg px-3 py-2">
-            {error}
-          </p>
+          <div className="border border-spot/20 bg-spot/5 text-spot text-xs font-mono rounded-xl p-4">
+            ⚠️ Update failed: {error}
+          </div>
         )}
+        
         {info && (
-          <p className="text-sm text-go bg-go/10 border border-go/30 rounded-lg px-3 py-2">
-            {info}
-          </p>
+          <div className="border border-go/20 bg-go/5 text-go text-xs font-mono rounded-xl p-4">
+            ✅ Success: {info}
+          </div>
         )}
 
-        <button type="submit" disabled={saving} className="btn-spot w-full">
-          {saving ? 'Saving…' : 'Save changes'}
+        <button type="submit" disabled={saving} className="btn-spot w-full text-sm font-bold flex items-center justify-center gap-1.5 mt-2">
+          {saving ? (
+            <>
+              <span className="w-4 h-4 border-2 border-void border-t-transparent rounded-full animate-spin"></span>
+              Saving changes...
+            </>
+          ) : (
+            'Save Profile'
+          )}
         </button>
       </form>
     </div>

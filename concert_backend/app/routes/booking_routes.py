@@ -94,7 +94,7 @@ def my_bookings(current_user: dict = Depends(get_current_user)):
     """
     result = (
         supabase_admin.table("bookings")
-        .select("*")
+        .select("*, events(*)")
         .eq("user_id", current_user["user_id"])
         .execute()
     )

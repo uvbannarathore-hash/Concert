@@ -210,5 +210,5 @@ def update_pricing(event_id: str, category: str, payload: UpdatePricingRequest, 
 
 @router.get("/bookings")
 def list_all_bookings(admin=Depends(get_current_admin)):
-    result = supabase_admin.table("bookings").select("*").order("created_at", desc=True).execute()
+    result = supabase_admin.table("bookings").select("*, events(*)").order("created_at", desc=True).execute()
     return {"bookings": result.data}
