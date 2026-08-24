@@ -1,5 +1,5 @@
 import time
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from app.auth import get_current_user
 from app.supabase_client import supabase_admin
@@ -11,27 +11,19 @@ class CreateBookingRequest(BaseModel):
     event_id: str
     category: str
     seats: int
-    payment_method: str = "Card"  # 'Card', 'UPI', 'Wallet' - dummy, not verified
+    payment_method: str = "Card"
 
 
 @router.post("")
 def create_booking(payload: CreateBookingRequest, current_user: dict = Depends(get_current_user)):
-    """
-    Creates a booking directly against Supabase (bypasses n8n/AI Agent
-    for speed - booking writes should be fast and transactional).
+    # ---------------- ADMIN BLOCK CHECK ----------------
+    if current_user.get("is_admin") is True:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin accounts are not permitted to book tickets. Please use a regular customer account."
+        )
+    # ----------------------------------------------------
 
-    Steps:
-    1. Check seat availability for the requested category.
-    2. Insert the booking row (linked to the REAL user_id).
-    3. Decrement available_seats.
-    4. Record a dummy payment (no real gateway - this is a simulated
-       transaction so the flow feels complete end-to-end).
-
-    NOTE: For true race-condition safety (two users booking the last
-    seat at the same time), this logic should eventually move into a
-    Postgres function/RPC that does the check-and-decrement atomically.
-    This version is fine for learning/testing.
-    """
     ticket = (
         supabase_admin.table("ticket_categories")
         .select("*")
@@ -87,11 +79,6 @@ def create_booking(payload: CreateBookingRequest, current_user: dict = Depends(g
 
 @router.get("/me")
 def my_bookings(current_user: dict = Depends(get_current_user)):
-    """
-    Returns the logged-in user's bookings. This is the same data the
-    AI Agent's get_user_booking_history tool returns, but for direct
-    frontend use (e.g. a 'My Bookings' page) rather than chat.
-    """
     result = (
         supabase_admin.table("bookings")
         .select("*, events(*)")
@@ -103,14 +90,6 @@ def my_bookings(current_user: dict = Depends(get_current_user)):
 
 @router.post("/{booking_id}/cancel")
 def cancel_booking(booking_id: str, current_user: dict = Depends(get_current_user)):
-    """
-    Cancels a booking. Filtered by BOTH booking_id and user_id so a
-    user can only cancel their own booking - same security rule we
-    applied inside the n8n cancel_booking tool.
-
-    Seat restoration is handled automatically by the Postgres trigger
-    (trg_restore_seats) - no extra logic needed here.
-    """
     result = (
         supabase_admin.table("bookings")
         .update({"status": "Cancelled"})

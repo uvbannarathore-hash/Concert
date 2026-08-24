@@ -5,11 +5,7 @@ from app.supabase_client import supabase_admin
 async def get_current_user(authorization: str = Header(...)) -> dict:
     """
     Reads the 'Authorization: Bearer <token>' header, verifies it with
-    Supabase, and returns the authenticated user's info.
-
-    This is where the REAL user_id comes from - no more session_id
-    workarounds. Attach this as a dependency to any route that needs
-    to know who the logged-in user is.
+    Supabase, and fetches user profile details (including is_admin) from the users table.
     """
     if not authorization.startswith("Bearer "):
         raise HTTPException(
@@ -34,7 +30,28 @@ async def get_current_user(authorization: str = Header(...)) -> dict:
         )
 
     user = user_response.user
+    user_id = str(user.id)
+
+    # Database se user ka role / is_admin fetch karo
+    is_admin = False
+    name = ""
+    try:
+        profile_res = (
+            supabase_admin.table("users")
+            .select("is_admin, name")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        if profile_res.data and len(profile_res.data) > 0:
+            user_data = profile_res.data[0]
+            is_admin = bool(user_data.get("is_admin", False))
+            name = user_data.get("name", "")
+    except Exception:
+        pass
+
     return {
-        "user_id": user.id,          # <-- this is the real user_id (UUID)
+        "user_id": user_id,
         "email": user.email,
+        "name": name,
+        "is_admin": is_admin,
     }
