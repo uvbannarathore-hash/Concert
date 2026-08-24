@@ -45,7 +45,9 @@ export default function NavBar() {
           {loggedIn ? (
             <div className="flex items-center gap-3">
               {firstName && (
-                <span className="text-haze hidden sm:inline">Hey, {firstName}</span>
+                <Link to="/profile" className="text-haze hover:text-paper transition hidden sm:inline">
+                  Hey, {firstName}
+                </Link>
               )}
               <button onClick={handleLogout} className="btn-ghost !px-4 !py-2 text-sm">
                 Log out

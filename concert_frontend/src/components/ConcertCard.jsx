@@ -9,13 +9,32 @@ const statusStyles = {
   Completed: 'text-haze border-edge bg-stage2',
 }
 
+// Straight-line distance between two lat/lng points, in km.
+function getDistanceKm(lat1, lon1, lat2, lon2) {
+  const R = 6371
+  const dLat = ((lat2 - lat1) * Math.PI) / 180
+  const dLon = ((lon2 - lon1) * Math.PI) / 180
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+  return R * c
+}
+
 // `event` here represents a GROUP: same artist/title + venue + city + date,
 // with a `showtimes` array of { event_id, event_time, status } for each
 // individual time slot on that date.
-export default function ConcertCard({ event, wishlisted = false, onWishlistChange }) {
+export default function ConcertCard({ event, wishlisted = false, onWishlistChange, userLocation = null }) {
   const showtimes = event.showtimes && event.showtimes.length > 0
     ? event.showtimes
     : [{ event_id: event.event_id, event_time: event.event_time, status: event.status }]
+
+  // Distance from the user to this venue, only computable when both the
+  // browser granted location access AND this event has stored coordinates.
+  const distanceKm =
+    userLocation && event.latitude != null && event.longitude != null
+      ? getDistanceKm(userLocation.lat, userLocation.lng, event.latitude, event.longitude)
+      : null
 
   // Use the first (earliest) showtime as the "primary" one for the poster
   // link and wishlist action - matches BookMyShow's per-title behaviour.
@@ -124,8 +143,13 @@ export default function ConcertCard({ event, wishlisted = false, onWishlistChang
             {event.artist_name}
           </h3>
 
-          <p className="text-sm text-haze mb-3">
-            {event.venue_name}, {event.city}
+          <p className="text-sm text-haze mb-3 flex items-center gap-2 flex-wrap">
+            <span>{event.venue_name}, {event.city}</span>
+            {distanceKm !== null && (
+              <span className="text-[11px] font-mono px-2 py-0.5 rounded-full border border-edge text-spot2 bg-spot2/10">
+                {distanceKm.toFixed(1)} km away
+              </span>
+            )}
           </p>
 
           <div className="text-xs font-mono text-haze border-t border-edge pt-3">
@@ -133,6 +157,20 @@ export default function ConcertCard({ event, wishlisted = false, onWishlistChang
           </div>
         </div>
       </Link>
+
+      {/* Get Directions - kept outside the poster <Link> to avoid nesting anchors */}
+      {event.latitude != null && event.longitude != null && (
+        <div className="px-5">
+          <a
+            href={`https://www.google.com/maps/dir/?api=1&destination=${event.latitude},${event.longitude}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-spot2 underline underline-offset-2 hover:text-spot inline-block"
+          >
+            Get Directions
+          </a>
+        </div>
+      )}
 
       {/* Showtime buttons - each links to its own specific event_id */}
       <div className="px-5 pb-5 flex flex-wrap gap-2">

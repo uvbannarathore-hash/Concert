@@ -9,8 +9,20 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [profile, setProfile] = useState(null)
+  const [userLocation, setUserLocation] = useState(null) // { lat, lng } once browser grants permission
 
   const CATEGORIES = ['Concert', 'Movie', 'Comedy Show', 'Music Show', 'Play', 'Sports']
+
+  useEffect(() => {
+    if (!navigator.geolocation) return
+    navigator.geolocation.getCurrentPosition(
+      (pos) => setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      () => {
+        // permission denied or unavailable - distance badges just won't show, no error needed
+      },
+      { timeout: 8000 }
+    )
+  }, [])
 
   useEffect(() => {
     setLoading(true)
@@ -169,7 +181,11 @@ export default function HomePage() {
 
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {groupedEvents.map((group) => (
-            <ConcertCard key={`${group.artist_name}|${group.venue_name}|${group.city}|${group.event_date}`} event={group} />
+            <ConcertCard
+              key={`${group.artist_name}|${group.venue_name}|${group.city}|${group.event_date}`}
+              event={group}
+              userLocation={userLocation}
+            />
           ))}
         </div>
       </section>

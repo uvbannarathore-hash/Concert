@@ -7,6 +7,7 @@ import BookingsPage from './pages/BookingsPage'
 import ChatPage from './pages/ChatPage'
 import AdminPage from './pages/AdminPage'
 import WishlistPage from './pages/WishlistPage'
+import ProfilePage from './pages/ProfilePage'
 import { api } from './lib/api'
 
 function RequireAuth({ children }) {
@@ -50,6 +51,14 @@ export default function App() {
           element={
             <RequireAuth>
               <WishlistPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/profile"
+          element={
+            <RequireAuth>
+              <ProfilePage />
             </RequireAuth>
           }
         />

@@ -15,6 +15,8 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 async def admin_chat(
     message: str = Form(...),
     image: UploadFile = File(None),
+    latitude: float = Form(None),
+    longitude: float = Form(None),
     admin=Depends(get_current_admin),
 ):
     """
@@ -30,6 +32,12 @@ async def admin_chat(
     embedded into the message text as "[Uploaded image URL: ...]" before
     forwarding to n8n. The AI Agent in n8n is instructed to detect this
     marker and pass the URL along when creating/updating an event.
+
+    If a venue location (latitude/longitude) is attached - e.g. picked via
+    Google Places Autocomplete on the frontend - it is sent as separate
+    body fields. The n8n workflow's own "Enrich With Location" node embeds
+    it into the message as "[Venue Location: lat,lng]" before the AI Agent
+    runs, so no enrichment is needed on this side.
     """
     if not N8N_ADMIN_WEBHOOK_URL:
         raise HTTPException(
@@ -75,6 +83,10 @@ async def admin_chat(
         "message": enriched_message,
     }
 
+    if latitude is not None and longitude is not None:
+        body["latitude"] = latitude
+        body["longitude"] = longitude
+
     async with httpx.AsyncClient(timeout=60.0) as client:
         try:
             response = await client.post(N8N_ADMIN_WEBHOOK_URL, json=body)
@@ -110,6 +122,8 @@ class CreateEventRequest(BaseModel):
     event_date: str   # "2026-12-20"
     event_time: str   # "7:00 PM"
     event_type: str = "Concert"  # Concert | Movie | Comedy Show | Music Show | Play | Sports
+    latitude: float | None = None
+    longitude: float | None = None
 
 
 @router.post("/events")
@@ -127,6 +141,8 @@ def create_event(payload: CreateEventRequest, admin=Depends(get_current_admin)):
             "event_time": payload.event_time,
             "event_type": payload.event_type,
             "status": "Upcoming",
+            "latitude": payload.latitude,
+            "longitude": payload.longitude,
         }
     ).execute()
     return {"message": "Event created", "event_id": event_id}

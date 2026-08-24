@@ -23,15 +23,61 @@ export default function AdminPage() {
   const [pastEventsLoading, setPastEventsLoading] = useState(false)
 
   const [chatMessages, setChatMessages] = useState([
-    { role: 'assistant', text: "I'm your admin assistant. Ask me to create, update, cancel, or delete events, check seat availability, or pull revenue reports. You can also attach an image (📎) when creating or updating an event to set its poster." },
+    { role: 'assistant', text: "I'm your admin assistant. Ask me to create, update, cancel, or delete events, check seat availability, or pull revenue reports. You can also attach an image (📎) or pin a venue location (📍) when creating or updating an event." },
   ])
   const [chatInput, setChatInput] = useState('')
   const [chatImage, setChatImage] = useState(null)
   const [chatSending, setChatSending] = useState(false)
 
+  // Venue location picker (free OpenStreetMap Nominatim search - no API key/billing needed)
+  const [showLocationPicker, setShowLocationPicker] = useState(false)
+  const [venueLocation, setVenueLocation] = useState(null) // { name, address, latitude, longitude }
+  const [locationQuery, setLocationQuery] = useState('')
+  const [locationResults, setLocationResults] = useState([])
+  const [locationSearching, setLocationSearching] = useState(false)
+
   function flash(setter, text) {
     setter(text)
     setTimeout(() => setter(''), 3500)
+  }
+
+  // Debounced search against Nominatim (OpenStreetMap's free geocoder).
+  // Usage policy: max ~1 request/sec, no key required, must send a
+  // descriptive User-Agent/Referer (browsers do this automatically).
+  useEffect(() => {
+    if (!showLocationPicker || locationQuery.trim().length < 3) {
+      setLocationResults([])
+      return
+    }
+    const timer = setTimeout(async () => {
+      setLocationSearching(true)
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&limit=5&q=${encodeURIComponent(locationQuery)}`
+        )
+        const data = await res.json()
+        setLocationResults(data || [])
+      } catch (err) {
+        console.warn('Venue search failed', err)
+        setLocationResults([])
+      } finally {
+        setLocationSearching(false)
+      }
+    }, 500) // debounce so we don't hammer the free API on every keystroke
+
+    return () => clearTimeout(timer)
+  }, [locationQuery, showLocationPicker])
+
+  function selectLocationResult(place) {
+    setVenueLocation({
+      name: place.display_name.split(',')[0],
+      address: place.display_name,
+      latitude: parseFloat(place.lat),
+      longitude: parseFloat(place.lon),
+    })
+    setShowLocationPicker(false)
+    setLocationQuery('')
+    setLocationResults([])
   }
 
   async function handleCreateEvent(e) {
@@ -69,15 +115,21 @@ export default function AdminPage() {
     const text = chatInput.trim()
     if (!text || chatSending) return
 
-    setChatMessages((m) => [...m, { role: 'user', text: chatImage ? `${text} 📎 ${chatImage.name}` : text }])
+    const tags = [
+      chatImage ? `📎 ${chatImage.name}` : null,
+      venueLocation ? `📍 ${venueLocation.name || venueLocation.address}` : null,
+    ].filter(Boolean).join(' ')
+
+    setChatMessages((m) => [...m, { role: 'user', text: tags ? `${text} ${tags}` : text }])
     setChatInput('')
     setChatSending(true)
     setError('')
 
     const imageToSend = chatImage
+    const locationToSend = venueLocation
 
     try {
-      const res = await adminApi.chat(text, imageToSend)
+      const res = await adminApi.chat(text, imageToSend, locationToSend)
       setChatMessages((m) => [...m, { role: 'assistant', text: res.reply }])
     } catch (err) {
       if (err.message.includes('403')) setForbidden(true)
@@ -85,6 +137,7 @@ export default function AdminPage() {
     } finally {
       setChatSending(false)
       setChatImage(null)
+      setVenueLocation(null)
     }
   }
 
@@ -200,6 +253,48 @@ export default function AdminPage() {
             </div>
           )}
 
+          {venueLocation && (
+            <div className="flex items-center gap-2 mb-2 text-xs text-haze bg-stage2 border border-edge rounded-lg px-3 py-2 w-fit">
+              <span>📍 {venueLocation.name || venueLocation.address}</span>
+              <button
+                type="button"
+                onClick={() => setVenueLocation(null)}
+                className="text-spot hover:underline"
+              >
+                Remove
+              </button>
+            </div>
+          )}
+
+          {showLocationPicker && (
+            <div className="mb-2 relative">
+              <input
+                className="field"
+                value={locationQuery}
+                onChange={(e) => setLocationQuery(e.target.value)}
+                placeholder="Search venue, e.g. 'DY Patil Stadium Mumbai'…"
+                autoFocus
+              />
+              {locationSearching && (
+                <p className="text-xs text-haze mt-1">Searching…</p>
+              )}
+              {locationResults.length > 0 && (
+                <div className="absolute z-10 w-full mt-1 bg-stage2 border border-edge rounded-lg overflow-hidden">
+                  {locationResults.map((place, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => selectLocationResult(place)}
+                      className="block w-full text-left px-3 py-2 text-sm text-paper hover:bg-spot hover:text-void transition"
+                    >
+                      {place.display_name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           <form onSubmit={handleAdminChatSend} className="flex gap-2">
             <input
               className="field"
@@ -216,6 +311,14 @@ export default function AdminPage() {
                 onChange={(e) => setChatImage(e.target.files[0] || null)}
               />
             </label>
+            <button
+              type="button"
+              onClick={() => setShowLocationPicker((s) => !s)}
+              className="btn-spot !px-3"
+              title="Pin venue location on the map"
+            >
+              📍
+            </button>
             <button type="submit" disabled={chatSending} className="btn-spot !px-6">
               Send
             </button>

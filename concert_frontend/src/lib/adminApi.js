@@ -38,15 +38,20 @@ export const adminApi = {
   allBookings: () => adminRequest('/admin/bookings'),
   listConcerts: () => api.listConcerts(),
 
-  // Chat now supports an optional image file (e.g. event poster).
-  // Uses multipart/form-data instead of JSON, since it may carry a binary file.
-  chat: async (message, imageFile) => {
+  // Chat now supports an optional image file (e.g. event poster) AND an
+  // optional venue location (lat/lng) picked via Google Places Autocomplete.
+  // Uses multipart/form-data since it may carry a binary file.
+  chat: async (message, imageFile, venueLocation) => {
     const token = localStorage.getItem('access_token')
     if (!token) throw new Error('Not logged in')
 
     const formData = new FormData()
     formData.append('message', message)
     if (imageFile) formData.append('image', imageFile)
+    if (venueLocation) {
+      formData.append('latitude', venueLocation.latitude)
+      formData.append('longitude', venueLocation.longitude)
+    }
 
     const res = await fetch(`${BASE_URL}/admin/agent-chat`, {
       method: 'POST',

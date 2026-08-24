@@ -7,6 +7,8 @@ export default function AuthPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [name, setName] = useState('')
+  const [phone, setPhone] = useState('')
+  const [city, setCity] = useState('')
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
   const [loading, setLoading] = useState(false)
@@ -19,7 +21,7 @@ export default function AuthPage() {
     setLoading(true)
     try {
       if (mode === 'signup') {
-        await api.signup(email, password, name)
+        await api.signup(email, password, name, phone, city)
         setInfo('Account created. You can log in now.')
         setMode('login')
       } else {
@@ -53,6 +55,28 @@ export default function AuthPage() {
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Your name"
               />
+            </div>
+          )}
+          {mode === 'signup' && (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm text-haze mb-1.5">Phone <span className="text-haze/60">(optional)</span></label>
+                <input
+                  className="field"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="98765 43210"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-haze mb-1.5">City <span className="text-haze/60">(optional)</span></label>
+                <input
+                  className="field"
+                  value={city}
+                  onChange={(e) => setCity(e.target.value)}
+                  placeholder="Mumbai"
+                />
+              </div>
             </div>
           )}
           <div>
