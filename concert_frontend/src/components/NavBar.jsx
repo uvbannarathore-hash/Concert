@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
-import { Link, useNavigate, useLocation } from 'react-router-dom'
+import { Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
 
 export default function NavBar() {
@@ -11,6 +11,9 @@ export default function NavBar() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [dropdownOpen, setDropdownOpen] = useState(false)
   
+  const [searchParams, setSearchParams] = useSearchParams()
+  const searchVal = searchParams.get('search') || ''
+
   const dropdownRef = useRef(null)
 
   useEffect(() => {
@@ -21,18 +24,16 @@ export default function NavBar() {
     }
   }, [loggedIn])
 
-  // Close dropdown on click outside
   useEffect(() => {
     function handleClickOutside(event) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
-        setDropdownOpen(false);
+        setDropdownOpen(false)
       }
     }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+    document.addEventListener("mousedown", handleClickOutside)
+    return () => document.removeEventListener("mousedown", handleClickOutside)
+  }, [])
 
-  // Close mobile menu on route change
   useEffect(() => {
     setMobileMenuOpen(false)
   }, [location])
@@ -43,6 +44,20 @@ export default function NavBar() {
     navigate('/login')
   }
 
+  function handleSearchChange(val) {
+    if (location.pathname === '/') {
+      if (val) {
+        setSearchParams({ search: val })
+      } else {
+        const nextParams = new URLSearchParams(searchParams)
+        nextParams.delete('search')
+        setSearchParams(nextParams)
+      }
+    } else {
+      navigate(`/?search=${encodeURIComponent(val)}`)
+    }
+  }
+
   const firstName = profile?.name?.split(' ')[0] || 'User'
   const activeClass = (path) => 
     location.pathname === path 
@@ -51,22 +66,43 @@ export default function NavBar() {
 
   return (
     <header className="sticky top-0 z-50 w-full bg-void/70 backdrop-blur-lg border-b border-white/[0.04]">
-      <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+      <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between gap-4">
         
         {/* Logo */}
-        <Link to="/" className="font-display text-2xl tracking-wider text-paper flex items-center gap-1.5 active:scale-95 transition-transform duration-200">
+        <Link to="/" className="font-display text-2xl tracking-wider text-paper flex items-center gap-1.5 active:scale-95 transition-transform duration-200 flex-shrink-0">
           <span className="w-2.5 h-6 bg-spot rounded-sm inline-block"></span>
           LIVE<span className="text-spot">WIRE</span>
         </Link>
 
+        {/* Header Search Bar (Desktop) */}
+        <div className="hidden md:flex items-center relative flex-1 max-w-xs">
+          <input
+            type="text"
+            value={searchVal}
+            onChange={(e) => handleSearchChange(e.target.value)}
+            placeholder="Search shows, cities..."
+            className="field !py-2 !pl-9 !pr-8 text-xs bg-stage/40 border border-white/[0.04] focus:bg-stage focus:border-spot/40 transition-all duration-300"
+          />
+          <svg className="w-3.5 h-3.5 text-haze/60 absolute left-3 top-2.5" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+          </svg>
+          {searchVal && (
+            <button 
+              onClick={() => handleSearchChange('')}
+              className="absolute right-3.5 top-2 text-xs text-haze hover:text-paper font-bold"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+
         {/* Desktop Navigation Links */}
-        <nav className="hidden md:flex items-center gap-8 font-body text-sm font-medium">
+        <nav className="hidden md:flex items-center gap-6 font-body text-sm font-medium">
           <Link to="/" className={`${activeClass('/')} transition-all duration-200`}>Browse</Link>
           {loggedIn && (
             <>
               <Link to="/wishlist" className={`${activeClass('/wishlist')} transition-all duration-200`}>Wishlist</Link>
               <Link to="/bookings" className={`${activeClass('/bookings')} transition-all duration-200`}>My Bookings</Link>
-              <Link to="/chat" className={`${activeClass('/chat')} transition-all duration-200`}>Assistant</Link>
             </>
           )}
           {profile?.is_admin && (
@@ -78,24 +114,22 @@ export default function NavBar() {
         </nav>
 
         {/* User Account / Actions (Desktop) */}
-        <div className="hidden md:flex items-center gap-4">
+        <div className="hidden md:flex items-center gap-4 flex-shrink-0">
           {loggedIn ? (
             <div className="relative" ref={dropdownRef}>
               <button 
                 onClick={() => setDropdownOpen(!dropdownOpen)}
                 className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/[0.04] bg-stage2/40 hover:bg-stage2/80 transition duration-300 outline-none"
               >
-                {/* Simulated Avatar Badge */}
                 <span className="w-7 h-7 rounded-full bg-gradient-to-tr from-spot to-[#ff5c84] text-void font-bold text-xs flex items-center justify-center uppercase shadow-sm">
                   {firstName.charAt(0)}
                 </span>
-                <span className="text-sm font-semibold text-paper max-w-[120px] truncate">{firstName}</span>
+                <span className="text-sm font-semibold text-paper max-w-[100px] truncate">{firstName}</span>
                 <svg className={`w-4 h-4 text-haze transition-transform duration-300 ${dropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7"></path>
                 </svg>
               </button>
 
-              {/* Profile Dropdown Sheet */}
               {dropdownOpen && (
                 <div className="absolute right-0 mt-2 w-48 rounded-xl border border-white/[0.06] bg-stage/95 backdrop-blur-xl shadow-2xl p-2 animate-scale-in flex flex-col gap-1 z-50">
                   <Link 
@@ -141,12 +175,34 @@ export default function NavBar() {
       {/* Mobile Drawer Menu */}
       {mobileMenuOpen && (
         <div className="md:hidden border-t border-white/[0.04] bg-void/95 backdrop-blur-xl animate-fade-in px-6 py-5 space-y-4 flex flex-col">
+          
+          {/* Mobile Search Bar */}
+          <div className="relative w-full pb-2">
+            <input
+              type="text"
+              value={searchVal}
+              onChange={(e) => handleSearchChange(e.target.value)}
+              placeholder="Search shows, cities..."
+              className="field !py-2 !pl-10 !pr-8 text-sm w-full"
+            />
+            <svg className="w-4 h-4 text-haze/60 absolute left-3.5 top-5" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+            </svg>
+            {searchVal && (
+              <button 
+                onClick={() => handleSearchChange('')}
+                className="absolute right-3.5 top-4.5 text-xs text-haze hover:text-paper font-bold"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+
           <Link to="/" className="text-base font-medium text-paper py-1 border-b border-white/[0.02]">Browse</Link>
           {loggedIn ? (
             <>
               <Link to="/wishlist" className="text-base font-medium text-paper py-1 border-b border-white/[0.02]">Wishlist</Link>
               <Link to="/bookings" className="text-base font-medium text-paper py-1 border-b border-white/[0.02]">My Bookings</Link>
-              <Link to="/chat" className="text-base font-medium text-paper py-1 border-b border-white/[0.02]">Assistant</Link>
               <Link to="/profile" className="text-base font-medium text-paper py-1 border-b border-white/[0.02]">👤 Profile ({firstName})</Link>
               {profile?.is_admin && (
                 <Link to="/admin" className="text-base font-medium text-spot2 py-1 border-b border-white/[0.02]">⚙️ Admin Backend</Link>

@@ -1,16 +1,54 @@
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import ConcertCard from '../components/ConcertCard'
+
+const SLIDES = [
+  {
+    title: "FEEL THE STAGE FROM ROW ONE",
+    subtitle: "Diljit Dosanjh, Arijit Singh, and live arena concerts. Secure your tickets in seconds.",
+    cta: "Browse Concerts",
+    category: "Concert",
+    themeClass: "from-spot/30 via-void/50 to-void/90",
+    badge: "🔥 SELLING FAST",
+    badgeColor: "text-spot border-spot/20 bg-spot/5"
+  },
+  {
+    title: "MIDNIGHT SESSIONS",
+    subtitle: "Late-night sets, techno undergrounds, and exclusive club bookings near you.",
+    cta: "Explore Music Shows",
+    category: "Music Show",
+    themeClass: "from-go/25 via-void/50 to-void/90",
+    badge: "🎧 INDIE & TECHNO",
+    badgeColor: "text-go border-go/20 bg-go/5"
+  },
+  {
+    title: "STANDUP LAUGH SPECIALS",
+    subtitle: "Live comedy tours, standup specials, and laugh riots. Sit front-row for a laugh.",
+    cta: "Book Comedy Shows",
+    category: "Comedy Show",
+    themeClass: "from-spot2/25 via-void/50 to-void/90",
+    badge: "🎤 LIVE COMEDY",
+    badgeColor: "text-spot2 border-spot2/20 bg-spot2/5"
+  }
+]
 
 export default function HomePage() {
   const [events, setEvents] = useState([])
   const [city, setCity] = useState('')
   const [eventType, setEventType] = useState('')
-  const [searchQuery, setSearchQuery] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [profile, setProfile] = useState(null)
   const [userLocation, setUserLocation] = useState(null)
+
+  // Carousel State
+  const [currentSlide, setCurrentSlide] = useState(0)
+  const [isHovered, setIsHovered] = useState(false)
+
+  // URL search parameter binding
+  const [searchParams, setSearchParams] = useSearchParams()
+  const searchQuery = searchParams.get('search') || ''
 
   const CATEGORIES = ['Concert', 'Movie', 'Comedy Show', 'Music Show', 'Play', 'Sports']
 
@@ -38,6 +76,15 @@ export default function HomePage() {
     }
   }, [])
 
+  // Auto-rotate carousel slides
+  useEffect(() => {
+    if (isHovered) return
+    const interval = setInterval(() => {
+      setCurrentSlide((prev) => (prev + 1) % SLIDES.length)
+    }, 5000)
+    return () => clearInterval(interval)
+  }, [isHovered])
+
   function timeGreeting() {
     const h = new Date().getHours()
     if (h < 12) return 'Good morning'
@@ -47,12 +94,10 @@ export default function HomePage() {
 
   const today = new Date().toISOString().split('T')[0]
   
-  // Filter out expired events
   const activeEvents = events.filter(
     (e) => e.event_date >= today && e.status !== 'Cancelled' && e.status !== 'Completed'
   )
 
-  // Local Search Filter
   const searchedEvents = activeEvents.filter((e) => {
     const term = searchQuery.toLowerCase().trim()
     if (!term) return true
@@ -64,10 +109,8 @@ export default function HomePage() {
     )
   })
 
-  // Extract cities from active events list
   const cities = [...new Set(activeEvents.map((e) => e.city))]
 
-  // Group events by same details but different showtimes
   function groupEvents(list) {
     const groups = new Map()
 
@@ -95,45 +138,88 @@ export default function HomePage() {
 
   const groupedEvents = groupEvents(searchedEvents)
 
+  const handleSlideCtaClick = (category) => {
+    setEventType(category)
+    document.getElementById('shows')?.scrollIntoView({ behavior: 'smooth' })
+  }
+
   return (
     <div className="animate-fade-in-up">
-      {/* Hero mesh section */}
-      <section className="relative overflow-hidden border-b border-white/[0.04] bg-spot-radial pt-24 pb-20 px-6">
-        <div className="absolute inset-0 bg-[linear-gradient(to_bottom,transparent_70%,#050409_100%)] pointer-events-none" />
-        <div className="max-w-6xl mx-auto relative z-10">
-          <p className="eyebrow mb-4">
-            {profile?.name ? `${timeGreeting()}, ${profile.name.split(' ')[0]}` : 'LIVE, TONIGHT, EVERYWHERE'}
-          </p>
+      
+      {/* Dynamic Auto-Playing Carousel Section */}
+      <section 
+        className="relative overflow-hidden border-b border-white/[0.04] bg-void h-[460px] flex items-center px-6 transition-all duration-500 ease-in-out"
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+      >
+        {/* Dynamic Mesh Slide Gradients */}
+        <div className={`absolute inset-0 bg-gradient-to-tr ${SLIDES[currentSlide].themeClass} transition-all duration-700 pointer-events-none`} />
+        <div className="absolute inset-0 bg-[linear-gradient(to_bottom,transparent_75%,#050409_100%)] pointer-events-none" />
+        
+        <div className="max-w-6xl mx-auto relative z-10 w-full flex flex-col justify-center h-full pt-8">
+          <div className="flex items-center gap-3 mb-4 animate-scale-in">
+            <span className="text-[10px] font-mono tracking-widest text-haze/60 uppercase">
+              {profile?.name ? `${timeGreeting()}, ${profile.name.split(' ')[0]}` : 'LIVE TICKET HUB'}
+            </span>
+            <span className={`text-[9px] font-mono px-2 py-0.5 rounded border uppercase tracking-wider ${SLIDES[currentSlide].badgeColor}`}>
+              {SLIDES[currentSlide].badge}
+            </span>
+          </div>
           
-          <h1 className="font-display text-5xl sm:text-6xl md:text-8xl leading-[0.9] tracking-tight max-w-4xl text-paper">
-            FEEL THE STAGE<br />
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-spot via-[#ff5c84] to-spot2">FROM ROW ONE.</span>
+          <h1 className="font-display text-4xl sm:text-5xl md:text-7xl leading-[0.95] tracking-tight max-w-4xl text-paper uppercase transition-all duration-300">
+            {SLIDES[currentSlide].title}
           </h1>
           
-          <p className="text-haze text-base sm:text-lg mt-6 max-w-xl leading-relaxed">
-            Instant tickets for your favorite events. Ask our AI booking assistant anything, pay in seconds, and secure your spot under the spotlight.
+          <p className="text-haze text-sm sm:text-base mt-4 max-w-xl leading-relaxed">
+            {SLIDES[currentSlide].subtitle}
           </p>
 
           <div className="flex flex-wrap gap-3 mt-8">
+            <button
+              onClick={() => handleSlideCtaClick(SLIDES[currentSlide].category)}
+              className="btn-spot !px-6 !py-2.5 text-xs font-bold uppercase tracking-wider"
+            >
+              {SLIDES[currentSlide].cta}
+            </button>
             <a
               href="https://t.me/Apra_shaktibot?text=Hi%20Apra%2C%20I%20want%20help%20with%20booking%20tickets."
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-6 py-3 rounded-full bg-void border border-white/[0.08] hover:border-spot/40 text-paper font-semibold hover:-translate-y-0.5 active:translate-y-0 transition-all duration-300 shadow-lg text-sm"
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-void border border-white/[0.08] hover:border-spot/40 text-paper font-semibold hover:-translate-y-0.5 active:translate-y-0 transition-all duration-300 text-xs"
             >
-              <svg className="w-4 h-4 text-[#229ED9]" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69.01-.03.01-.14-.07-.2-.08-.06-.19-.04-.27-.02-.12.02-1.96 1.25-5.54 3.69-.52.36-1 .53-1.42.52-.47-.01-1.37-.26-2.03-.48-.82-.27-1.47-.42-1.42-.88.03-.24.35-.49.97-.74 3.79-1.65 6.32-2.73 7.57-3.26 3.61-1.53 4.36-1.8 4.85-1.8.11 0 .35.03.5.15.13.1.17.25.18.36z"/>
-              </svg>
-              Chat on Telegram
-            </a>
-            
-            <a
-              href="#shows"
-              className="btn-spot !px-6 !py-3 text-sm flex items-center justify-center"
-            >
-              View Shows 👇
+              💬 Support on Telegram
             </a>
           </div>
+        </div>
+
+        {/* Carousel Navigation Arrow controls */}
+        <button
+          onClick={() => setCurrentSlide((prev) => (prev - 1 + SLIDES.length) % SLIDES.length)}
+          className="absolute left-4 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-void/50 border border-white/[0.04] text-paper flex items-center justify-center hover:bg-void/80 hover:scale-105 active:scale-95 transition"
+          aria-label="Previous slide"
+        >
+          ❮
+        </button>
+        <button
+          onClick={() => setCurrentSlide((prev) => (prev + 1) % SLIDES.length)}
+          className="absolute right-4 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-void/50 border border-white/[0.04] text-paper flex items-center justify-center hover:bg-void/80 hover:scale-105 active:scale-95 transition"
+          aria-label="Next slide"
+        >
+          ❯
+        </button>
+
+        {/* Indicator dots */}
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex gap-2">
+          {SLIDES.map((_, idx) => (
+            <button
+              key={idx}
+              onClick={() => setCurrentSlide(idx)}
+              className={`w-2 h-2 rounded-full transition-all duration-300 ${
+                currentSlide === idx ? 'bg-spot w-6' : 'bg-white/20 hover:bg-white/40'
+              }`}
+              aria-label={`Go to slide ${idx + 1}`}
+            />
+          ))}
         </div>
       </section>
 
@@ -169,41 +255,33 @@ export default function HomePage() {
       {/* Main Events Search & Listing Section */}
       <section className="max-w-6xl mx-auto px-6 py-14">
         
-        {/* Dynamic Filter Header */}
+        {/* Filter Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-10 border-b border-white/[0.03] pb-6">
           <div>
             <h2 className="font-display text-4xl tracking-wide uppercase text-paper">
-              {searchQuery ? 'Search Results' : 'On Sale Now'}
+              {searchQuery ? `Search: "${searchQuery}"` : 'On Sale Now'}
             </h2>
             <p className="text-xs text-haze/60 font-mono mt-1">
-              Showing {groupedEvents.length} unique events
+              Showing {groupedEvents.length} active shows
             </p>
           </div>
 
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-            {/* Search Input */}
-            <div className="relative">
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search artists, venues, cities..."
-                className="field !py-2 !pl-10 !pr-4 text-sm w-full sm:w-64"
-              />
-              <svg className="w-4 h-4 text-haze/60 absolute left-3.5 top-3" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
-              </svg>
-              {searchQuery && (
-                <button 
-                  onClick={() => setSearchQuery('')}
-                  className="absolute right-3.5 top-2.5 text-xs text-haze hover:text-paper"
-                >
-                  ✕
-                </button>
-              )}
-            </div>
+            {/* Reset / Status Info */}
+            {searchQuery && (
+              <button 
+                onClick={() => {
+                  const nextParams = new URLSearchParams(searchParams)
+                  nextParams.delete('search')
+                  setSearchParams(nextParams)
+                }}
+                className="text-xs text-spot hover:underline self-center py-1 font-mono uppercase tracking-wider"
+              >
+                Clear Search ✕
+              </button>
+            )}
 
-            {/* City Badges Dropdown/Selector */}
+            {/* City Badges */}
             <div className="flex gap-1.5 overflow-x-auto pb-1 sm:pb-0">
               <button
                 onClick={() => setCity('')}
@@ -262,7 +340,11 @@ export default function HomePage() {
             <p className="font-display text-2xl mb-2 text-paper mt-3 uppercase tracking-wide">Nothing matches your search</p>
             <p className="text-sm text-haze max-w-sm mx-auto">Check back soon, clear your filters, or type another search term.</p>
             <button 
-              onClick={() => { setCity(''); setEventType(''); setSearchQuery(''); }}
+              onClick={() => {
+                setCity('')
+                setEventType('')
+                setSearchParams({})
+              }}
               className="btn-ghost !px-5 !py-2 text-xs mt-6"
             >
               Reset Filters
