@@ -228,6 +228,8 @@ export default function AdminPage() {
           {msg && <div className="border border-go/20 bg-go/5 text-go text-xs font-mono rounded-xl p-4">{msg}</div>}
           {error && <div className="border border-spot/20 bg-spot/5 text-spot text-xs font-mono rounded-xl p-4">{error}</div>}
 
+
+
           {/* 1. AI Assistant Panel */}
           {tab === 'assistant' && (
             <div className="bg-stage/20 border border-white/[0.04] rounded-2xl p-5 flex flex-col h-[55vh] shadow-2xl relative">
