@@ -56,9 +56,9 @@ async function request(path, { method = 'GET', body, auth = false } = {}) {
 }
 
 export const api = {
-  // phone/city are optional at signup - pass undefined/null if not collected yet
-  signup: (email, password, name, phone, city) =>
-    request('/auth/signup', { method: 'POST', body: { email, password, name, phone, city } }),
+  // phone, city, and address are now REQUIRED at signup (backend enforces this too)
+  signup: (email, password, name, phone, city, address) =>
+    request('/auth/signup', { method: 'POST', body: { email, password, name, phone, city, address } }),
 
   login: async (email, password) => {
     const data = await request('/auth/login', { method: 'POST', body: { email, password } })
@@ -110,11 +110,11 @@ export const api = {
 
   myProfile: () => request('/auth/me', { auth: true }),
 
-  // Lets a logged-in user update their name/phone/city at any time
+  // Lets a logged-in user update their name/phone/city/address at any time
   // (e.g. from an Edit Profile page). Only pass the fields you want changed -
   // omit or pass undefined for anything that should stay the same.
-  updateProfile: ({ name, phone, city } = {}) =>
-    request('/auth/me', { method: 'PATCH', auth: true, body: { name, phone, city } }),
+  updateProfile: ({ name, phone, city, address } = {}) =>
+    request('/auth/me', { method: 'PATCH', auth: true, body: { name, phone, city, address } }),
 
   getWishlist: () => request('/wishlist', { auth: true }),
 

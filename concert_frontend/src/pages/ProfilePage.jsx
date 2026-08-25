@@ -17,6 +17,7 @@ export default function ProfilePage() {
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
   const [city, setCity] = useState('')
+  const [address, setAddress] = useState('')
   const [email, setEmail] = useState('')
 
   const [notifyTelegramForWebsite, setNotifyTelegramForWebsite] = useState(false)
@@ -30,6 +31,7 @@ export default function ProfilePage() {
         setName(data.name || '')
         setPhone(data.phone || '')
         setCity(data.city || '')
+        setAddress(data.address || '')
         setEmail(data.email || '')
       })
       .catch((err) => setError(err.message))
@@ -59,7 +61,7 @@ export default function ProfilePage() {
     setInfo('')
     setSaving(true)
     try {
-      await api.updateProfile({ name, phone, city })
+      await api.updateProfile({ name, phone, city, address })
       setInfo('Profile successfully updated.')
     } catch (err) {
       setError(err.message)
@@ -144,6 +146,17 @@ export default function ProfilePage() {
               placeholder="e.g. Mumbai"
             />
           </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-mono text-haze/60 mb-2 uppercase">Address</label>
+          <input
+            className="field"
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            placeholder="e.g. 123 MG Road, Near City Mall"
+            required
+          />
         </div>
 
         {error && (

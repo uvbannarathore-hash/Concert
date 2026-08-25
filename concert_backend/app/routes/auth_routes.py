@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends,HTTPException
-from pydantic import BaseModel, EmailStr
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, EmailStr, Field
 from app.supabase_client import supabase_anon, supabase_admin
 from app.auth import get_current_user
 
@@ -10,14 +10,18 @@ class SignupRequest(BaseModel):
     email: EmailStr
     password: str
     name: str | None = None
-    phone: str | None = None
-    city: str | None = None
+    # phone, city, and address are now REQUIRED at signup time
+    # (min_length=1 rejects empty strings, not just missing fields)
+    phone: str = Field(..., min_length=1)
+    city: str = Field(..., min_length=1)
+    address: str = Field(..., min_length=1)
 
 
 class UpdateProfileRequest(BaseModel):
     name: str | None = None
     phone: str | None = None
     city: str | None = None
+    address: str | None = None
 
 
 class LoginRequest(BaseModel):
@@ -50,7 +54,8 @@ def signup(payload: SignupRequest):
     # it does NOT automatically copy it into our own public.users table.
     # A DB trigger (or similar) already creates the public.users row with
     # just the user_id/email when auth.users gets a new row, so here we
-    # explicitly upsert to make sure `name` actually lands in that table too.
+    # explicitly upsert to make sure name/phone/city/address actually land
+    # in that table too.
     try:
         supabase_admin.table("users").upsert(
             {
@@ -59,6 +64,7 @@ def signup(payload: SignupRequest):
                 "name": payload.name,
                 "phone": payload.phone,
                 "city": payload.city,
+                "address": payload.address,
             }
         ).execute()
     except Exception as e:
@@ -77,13 +83,13 @@ def signup(payload: SignupRequest):
 @router.get("/me")
 def get_my_profile(current_user: dict = Depends(get_current_user)):
     """
-    Returns the logged-in user's profile info (name, phone, city, email,
-    is_admin) - used by the frontend for personalized greetings, the
+    Returns the logged-in user's profile info (name, phone, city, address,
+    email, is_admin) - used by the frontend for personalized greetings, the
     Edit Profile page, and to decide whether to show the Admin link.
     """
     result = (
         supabase_admin.table("users")
-        .select("name, phone, city, email, is_admin")
+        .select("name, phone, city, address, email, is_admin")
         .eq("user_id", current_user["user_id"])
         .execute()
     )
@@ -95,6 +101,7 @@ def get_my_profile(current_user: dict = Depends(get_current_user)):
         "name": profile.get("name"),
         "phone": profile.get("phone"),
         "city": profile.get("city"),
+        "address": profile.get("address"),
         "is_admin": profile.get("is_admin", False),
     }
 
@@ -102,8 +109,8 @@ def get_my_profile(current_user: dict = Depends(get_current_user)):
 @router.patch("/me")
 def update_my_profile(payload: UpdateProfileRequest, current_user: dict = Depends(get_current_user)):
     """
-    Lets a logged-in user update their own name/phone/city at any time
-    (e.g. from an "Edit Profile" page), separate from signup.
+    Lets a logged-in user update their own name/phone/city/address at any
+    time (e.g. from an "Edit Profile" page), separate from signup.
     Only fields actually provided (non-None) are updated - others are
     left untouched.
     """
