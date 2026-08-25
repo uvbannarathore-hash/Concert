@@ -1,5 +1,12 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
+import { createClient } from '@supabase/supabase-js'
+
+// Publishable key only - safe for frontend use.
+const supabase = createClient(
+  'https://yacolxewrrlsxsbblulr.supabase.co',
+  'sb_publishable_bE-bCQUEYfZ2VVdQFP-yLQ_ALz82-tN'
+)
 
 export default function ProfilePage() {
   const [loading, setLoading] = useState(true)
@@ -12,6 +19,10 @@ export default function ProfilePage() {
   const [city, setCity] = useState('')
   const [email, setEmail] = useState('')
 
+  const [notifyTelegramForWebsite, setNotifyTelegramForWebsite] = useState(false)
+  const [hasTelegramLinked, setHasTelegramLinked] = useState(false)
+  const [prefSaving, setPrefSaving] = useState(false)
+
   useEffect(() => {
     api
       .myProfile()
@@ -23,6 +34,23 @@ export default function ProfilePage() {
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false))
+
+    // Fetch the Telegram notification preference directly from Supabase
+    // (this column isn't part of the FastAPI profile response).
+    const userId = localStorage.getItem('user_id')
+    if (userId) {
+      supabase
+        .from('users')
+        .select('notify_telegram_for_website, telegram_chat_id')
+        .eq('user_id', userId)
+        .single()
+        .then(({ data }) => {
+          if (data) {
+            setNotifyTelegramForWebsite(!!data.notify_telegram_for_website)
+            setHasTelegramLinked(!!data.telegram_chat_id)
+          }
+        })
+    }
   }, [])
 
   async function handleSave(e) {
@@ -37,6 +65,27 @@ export default function ProfilePage() {
       setError(err.message)
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function handleTelegramPrefToggle(checked) {
+    const userId = localStorage.getItem('user_id')
+    if (!userId) return
+
+    setNotifyTelegramForWebsite(checked) // optimistic update
+    setPrefSaving(true)
+    try {
+      const { error: updateError } = await supabase
+        .from('users')
+        .update({ notify_telegram_for_website: checked })
+        .eq('user_id', userId)
+
+      if (updateError) throw updateError
+    } catch (err) {
+      setNotifyTelegramForWebsite(!checked) // revert on failure
+      setError('Could not update Telegram preference: ' + err.message)
+    } finally {
+      setPrefSaving(false)
     }
   }
 
@@ -120,6 +169,39 @@ export default function ProfilePage() {
           )}
         </button>
       </form>
+
+      {/* Notification preferences */}
+      <div className="glass-card bg-stage/15 border border-white/[0.04] rounded-2xl p-6 space-y-4 shadow-2xl mt-6">
+        <div>
+          <h2 className="text-sm font-bold text-paper uppercase tracking-wide">Notification Preferences</h2>
+          <p className="text-xs text-haze mt-1">
+            Control how you get notified when a website booking is confirmed.
+          </p>
+        </div>
+
+        {hasTelegramLinked ? (
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={notifyTelegramForWebsite}
+              disabled={prefSaving}
+              onChange={(e) => handleTelegramPrefToggle(e.target.checked)}
+              className="mt-1 w-4 h-4 accent-spot cursor-pointer"
+            />
+            <span className="text-sm text-paper">
+              Also notify me on Telegram when I book from the website
+              <span className="block text-xs text-haze mt-0.5">
+                By default, website bookings only notify you here in the chat and by email.
+                Telegram bookings always notify on Telegram.
+              </span>
+            </span>
+          </label>
+        ) : (
+          <p className="text-xs text-haze">
+            Link your Telegram account (via the assistant) to enable Telegram notifications for website bookings too.
+          </p>
+        )}
+      </div>
     </div>
   )
 }

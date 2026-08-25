@@ -1,0 +1,140 @@
+// supabase/functions/send-booking-notifications/index.ts
+//
+// This runs on Supabase's own infrastructure (Deno-based Edge Functions) -
+// NOT n8n. It's triggered by a Supabase Database Webhook whenever a row
+// in `bookings` is updated. No n8n execution is consumed for this at all.
+
+import { serve } from "https://deno.land/std@0.203.0/http/server.ts";
+import { SMTPClient } from "https://deno.land/x/denomailer@1.6.0/mod.ts";
+
+const TELEGRAM_BOT_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN")!;
+const GMAIL_ADDRESS = Deno.env.get("GMAIL_ADDRESS")!;         // your full gmail address, e.g. yourname@gmail.com
+const GMAIL_APP_PASSWORD = Deno.env.get("GMAIL_APP_PASSWORD")!; // the 16-character App Password (not your normal password)
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const WEBHOOK_SHARED_SECRET = Deno.env.get("DB_WEBHOOK_SHARED_SECRET")!; // set this yourself, must match the header configured on the Database Webhook
+
+serve(async (req) => {
+  try {
+    // 1. Verify the request actually came from our own Supabase Database Webhook,
+    //    not some random caller hitting this public URL.
+    const incomingSecret = req.headers.get("x-webhook-secret");
+    if (incomingSecret !== WEBHOOK_SHARED_SECRET) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
+    }
+
+    const payload = await req.json();
+    const record = payload.record;      // the new row state
+    const oldRecord = payload.old_record; // the previous row state
+
+    // 2. Only act when status just transitioned INTO "Confirmed"
+    //    (so re-saving the row later doesn't re-send notifications).
+    const justConfirmed =
+      record?.status === "Confirmed" && oldRecord?.status !== "Confirmed";
+
+    if (!justConfirmed) {
+      return new Response(JSON.stringify({ skipped: true }), { status: 200 });
+    }
+
+    // 3. Look up the user (chat_id, email, telegram preference) using the
+    //    service role key (server-side only, never exposed to the browser).
+    const userRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/users?user_id=eq.${record.user_id}&select=telegram_chat_id,email,name,notify_telegram_for_website`,
+      {
+        headers: {
+          apikey: SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        },
+      }
+    );
+    const users = await userRes.json();
+    const user = Array.isArray(users) ? users[0] : null;
+
+    // 3b. Look up event details (bookings only stores event_id, not the name)
+    const eventRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/events?event_id=eq.${record.event_id}&select=artist_name,venue_name,event_date,event_time`,
+      {
+        headers: {
+          apikey: SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        },
+      }
+    );
+    const events = await eventRes.json();
+    const event = Array.isArray(events) ? events[0] : null;
+
+    const eventLine = event
+      ? `Event: ${event.artist_name}${event.venue_name ? ` @ ${event.venue_name}` : ""}${event.event_date ? ` on ${event.event_date}` : ""}\n`
+      : "";
+
+    const message = `Your booking is confirmed!\n\n${eventLine}Booking ID: ${record.booking_id}\nCategory: ${record.category}\nSeats: ${record.seats_booked}\n\nSee you at the show!`;
+
+    const tasks: Promise<Response>[] = [];
+
+    // 4. Telegram notification - only when:
+    //    a) the booking itself was made via Telegram, OR
+    //    b) the user has explicitly opted in to also get Telegram
+    //       notifications for bookings made on the website.
+    const shouldSendTelegram =
+      !!user?.telegram_chat_id &&
+      (record.booking_source === "telegram" || user?.notify_telegram_for_website === true);
+
+    if (shouldSendTelegram) {
+      tasks.push(
+        fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: user.telegram_chat_id,
+            text: message,
+          }),
+        })
+      );
+    }
+
+    // 5. Email notification via Gmail SMTP (only if we have an email on file)
+    if (user?.email) {
+      const client = new SMTPClient({
+        connection: {
+          hostname: "smtp.gmail.com",
+          port: 465,
+          tls: true,
+          auth: {
+            username: GMAIL_ADDRESS,
+            password: GMAIL_APP_PASSWORD,
+          },
+        },
+      });
+
+      tasks.push(
+        client
+          .send({
+            from: GMAIL_ADDRESS,
+            to: user.email,
+            subject: "Your booking is confirmed!",
+            html: `
+              <h2>Booking Confirmed</h2>
+              <p>Hi ${user.name || "there"},</p>
+              <p>Your booking is confirmed. Details:</p>
+              <ul>
+                ${event ? `<li><strong>Event:</strong> ${event.artist_name}${event.venue_name ? ` @ ${event.venue_name}` : ""}</li>` : ""}
+                <li><strong>Booking ID:</strong> ${record.booking_id}</li>
+                <li><strong>Category:</strong> ${record.category}</li>
+                <li><strong>Seats:</strong> ${record.seats_booked}</li>
+              </ul>
+              <p>See you at the show!</p>
+            `,
+          })
+          .then(() => client.close())
+          .then(() => new Response("ok")) // keep return type consistent with the Telegram fetch task
+      );
+    }
+
+    await Promise.allSettled(tasks);
+
+    return new Response(JSON.stringify({ success: true }), { status: 200 });
+  } catch (err) {
+    console.error(err);
+    return new Response(JSON.stringify({ error: String(err) }), { status: 500 });
+  }
+});

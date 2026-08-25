@@ -95,8 +95,15 @@ export const api = {
 
   myBookings: () => request('/bookings/me', { auth: true }),
 
-  createBooking: (event_id, category, seats, payment_method) =>
-    request('/bookings', { method: 'POST', auth: true, body: { event_id, category, seats, payment_method } }),
+  createOrder: (event_id, category, seats) =>
+    request('/bookings/create-order', { method: 'POST', auth: true, body: { event_id, category, seats } }),
+
+  verifyPayment: ({ booking_id, razorpay_order_id, razorpay_payment_id, razorpay_signature }) =>
+    request('/bookings/verify-payment', {
+      method: 'POST',
+      auth: true,
+      body: { booking_id, razorpay_order_id, razorpay_payment_id, razorpay_signature },
+    }),
 
   cancelBooking: (bookingId) =>
     request(`/bookings/${bookingId}/cancel`, { method: 'POST', auth: true }),

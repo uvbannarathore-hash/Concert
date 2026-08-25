@@ -1,5 +1,44 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
+import { createClient } from '@supabase/supabase-js'
+
+// Realtime uses the publishable key only - never the secret key in frontend code.
+const supabase = createClient(
+  'https://yacolxewrrlsxsbblulr.supabase.co',
+  'sb_publishable_bE-bCQUEYfZ2VVdQFP-yLQ_ALz82-tN'
+)
+
+
+function linkify(text) {
+  const urlPattern = /(https?:\/\/[^\s]+)/g
+  const parts = []
+  let lastIndex = 0
+  let match
+
+  while ((match = urlPattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index))
+    }
+    parts.push(
+      <a
+        key={match.index}
+        href={match[0]}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="underline underline-offset-4 text-spot2 hover:text-spot transition break-all"
+      >
+        {match[0]}
+      </a>
+    )
+    lastIndex = match.index + match[0].length
+  }
+
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex))
+  }
+
+  return parts
+}
 
 export default function ChatPage() {
   const [messages, setMessages] = useState([
@@ -17,6 +56,45 @@ export default function ChatPage() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, sending])
+
+  // Listen for booking confirmations in real time (fires when the
+  // Razorpay webhook -> n8n -> Supabase update lands on this user's row).
+  useEffect(() => {
+    const userId = localStorage.getItem('user_id')
+    if (!userId) return
+
+    const channel = supabase
+      .channel(`bookings-user-${userId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'bookings',
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload) => {
+          const wasConfirmed = payload.old?.status === 'Confirmed'
+          const isNowConfirmed = payload.new?.status === 'Confirmed'
+
+          if (isNowConfirmed && !wasConfirmed) {
+            const b = payload.new
+            setMessages((m) => [
+              ...m,
+              {
+                role: 'assistant',
+                text: `🎉 Your booking is confirmed!\n\nBooking ID: ${b.booking_id}\nCategory: ${b.category}\nSeats: ${b.seats_booked}\n\nSee you at the show!`,
+              },
+            ])
+          }
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [])
 
   async function handleSend(e) {
     e.preventDefault()
@@ -82,7 +160,7 @@ export default function ChatPage() {
                       : 'bg-stage border border-white/[0.04] text-paper rounded-bl-sm'
                   }`}
                 >
-                  {m.text}
+                  {linkify(m.text)}
                 </div>
 
                 {/* User avatar indicator */}
