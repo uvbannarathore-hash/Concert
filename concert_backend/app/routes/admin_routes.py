@@ -212,3 +212,58 @@ def update_pricing(event_id: str, category: str, payload: UpdatePricingRequest, 
 def list_all_bookings(admin=Depends(get_current_admin)):
     result = supabase_admin.table("bookings").select("*, events(*)").order("created_at", desc=True).execute()
     return {"bookings": result.data}
+
+
+@router.get("/dashboard-stats")
+def get_dashboard_stats(admin=Depends(get_current_admin)):
+    # 1. Total Sales (INR)
+    payments_res = supabase_admin.table("payments").select("amount").execute()
+    total_sales = sum(p["amount"] for p in payments_res.data) if payments_res.data else 0
+
+    # 2. Bookings counts
+    bookings_res = supabase_admin.table("bookings").select("status").execute()
+    total_bookings = len(bookings_res.data) if bookings_res.data else 0
+    confirmed_bookings = sum(1 for b in bookings_res.data if b["status"] == "Confirmed") if bookings_res.data else 0
+
+    # 3. Active Events count
+    events_res = supabase_admin.table("events").select("status").execute()
+    active_events = sum(1 for e in events_res.data if e["status"] not in ["Cancelled", "Completed"]) if events_res.data else 0
+
+    # 4. Ticket Capacity and Occupancy
+    categories_res = supabase_admin.table("ticket_categories").select("total_seats, available_seats").execute()
+    total_capacity = sum(c["total_seats"] for c in categories_res.data) if categories_res.data else 0
+    total_available = sum(c["available_seats"] for c in categories_res.data) if categories_res.data else 0
+    total_sold = total_capacity - total_available
+    occupancy_rate = round((total_sold / total_capacity * 100), 1) if total_capacity > 0 else 0
+
+    # 5. Sales by Event (aggr by artist name and city)
+    sales_res = supabase_admin.table("payments").select("amount, bookings(seats_booked, events(artist_name, city))").execute()
+    
+    event_aggregation = {}
+    if sales_res.data:
+        for item in sales_res.data:
+            bk = item.get("bookings") or {}
+            evt = bk.get("events") or {}
+            artist_name = evt.get("artist_name") or "Unknown Show"
+            city = evt.get("city") or ""
+            seats = bk.get("seats_booked") or 0
+            amount = item.get("amount") or 0
+
+            key = f"{artist_name} ({city})" if city else artist_name
+            if key not in event_aggregation:
+                event_aggregation[key] = {"event": key, "tickets_sold": 0, "revenue": 0}
+            
+            event_aggregation[key]["tickets_sold"] += seats
+            event_aggregation[key]["revenue"] += int(amount)
+
+    sales_by_event = list(event_aggregation.values())
+
+    return {
+        "total_sales": total_sales,
+        "total_bookings": total_bookings,
+        "confirmed_bookings": confirmed_bookings,
+        "active_events": active_events,
+        "occupancy_rate": occupancy_rate,
+        "total_sold": total_sold,
+        "sales_by_event": sales_by_event
+    }
