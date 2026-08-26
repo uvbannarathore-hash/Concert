@@ -1,5 +1,4 @@
 import { useEffect, useState, useRef } from 'react'
-import { useLocation } from 'react-router-dom'
 import { api } from '../lib/api'
 import { createClient } from '@supabase/supabase-js'
 
@@ -113,9 +112,7 @@ export default function ChatWidget() {
     return () => document.removeEventListener("mousedown", handleClickOutside)
   }, [])
 
-  const location = useLocation()
   if (!loggedIn) return null
-  if (location.pathname === '/admin') return null
 
   async function handleSend(e) {
     e.preventDefault()
