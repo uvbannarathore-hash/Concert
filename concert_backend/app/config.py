@@ -15,6 +15,11 @@ RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
 RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")
 RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET")
 
+# LiveKit Cloud (website speech-to-speech voice assistant)
+LIVEKIT_URL = os.getenv("LIVEKIT_URL")  # e.g. wss://your-project.livekit.cloud
+LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY")
+LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET")
+
 if not SUPABASE_URL or not SUPABASE_ANON_KEY:
     raise RuntimeError(
         "SUPABASE_URL and SUPABASE_ANON_KEY must be set in your .env file"

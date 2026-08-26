@@ -123,4 +123,8 @@ export const api = {
 
   removeFromWishlist: (eventId) =>
     request(`/wishlist/${eventId}`, { method: 'DELETE', auth: true }),
+
+  // Issues a short-lived LiveKit token for the website speech-to-speech
+  // voice booking assistant (see VoiceWidget.jsx).
+  getVoiceToken: () => request('/voice/token', { method: 'POST', auth: true }),
 }

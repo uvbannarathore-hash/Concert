@@ -2,7 +2,7 @@ annotated-types==0.8.0
 setuptools==70.3.0
 anyio==4.14.2
 certifi==2026.7.22
-click==8.4.2
+click==8.1.8
 colorama==0.4.6
 deprecation==2.1.0
 dnspython==2.8.0
@@ -39,3 +39,6 @@ uvicorn==0.30.6
 watchfiles==1.2.0
 websockets==15.0.1
 razorpay==1.4.2
+SpeechRecognition==3.10.4
+gTTS==2.5.1
+pydub==0.25.1

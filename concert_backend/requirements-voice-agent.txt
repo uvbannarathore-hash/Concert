@@ -1,0 +1,24 @@
+# --- Voice agent (Clinigo port) additions ---
+# Merge these into concert_backend/requirements.txt.
+# NOT included: psycopg2-binary, edge-tts, miniaudio, livekit-plugins-google,
+# google-generativeai — Clinigo used these but this port doesn't need them
+# (Supabase client replaces raw psycopg2; Gemini fallback in agent.py is
+# optional/unused by tata_voice_server.py; edge-tts/miniaudio appear unused
+# in the files actually ported).
+
+livekit>=0.18.0
+livekit-agents>=0.8.0
+livekit-plugins-openai>=0.8.0
+livekit-plugins-cartesia
+livekit-api
+audioop-lts
+aiohttp
+
+# ACTION NEEDED: Clinigo's own requirements.txt lists "livekit-plugins-nvidia"
+# but tata_voice_server.py and agent.py both import `silero` (Silero VAD) from
+# `livekit.plugins` — that's normally shipped as a SEPARATE package,
+# livekit-plugins-silero, which is missing from Clinigo's requirements.txt
+# entirely. This may be a pre-existing gap in Clinigo (silero possibly
+# installed manually / bundled with nvidia plugin on that machine) —
+# verify by trying `pip install livekit-plugins-silero` and adding it here
+# if the import fails without it.

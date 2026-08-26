@@ -9,6 +9,7 @@ import AdminPage from './pages/AdminPage'
 import WishlistPage from './pages/WishlistPage'
 import ProfilePage from './pages/ProfilePage'
 import ChatWidget from './components/ChatWidget'
+import VoiceWidget from './components/VoiceWidget'
 import { api } from './lib/api'
 
 function RequireAuth({ children }) {
@@ -67,6 +68,7 @@ export default function App() {
         </Routes>
       </div>
       <ChatWidget />
+      <VoiceWidget />
     </div>
   )
 }
