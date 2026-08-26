@@ -37,7 +37,6 @@ export const adminApi = {
   updatePricing: (eventId, category, price_inr) =>
     adminRequest(`/admin/ticket-categories/${eventId}/${category}`, { method: 'PATCH', body: { price_inr } }),
   allBookings: () => adminRequest('/admin/bookings'),
-  dashboardStats: () => adminRequest('/admin/dashboard-stats'),
   listConcerts: () => api.listConcerts(),
 
   // Chat now supports an optional image file (e.g. event poster) AND an
