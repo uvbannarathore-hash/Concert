@@ -16,6 +16,15 @@ implements the descriptor protocol), so ConcertBookingTools and
 ConcertBookingToolsWeb below don't need to subclass anything special —
 agent.py just does getattr(toolset_instance, tool_name) to collect the
 bound FunctionTool objects.
+
+NOTE: every tool method here MUST be declared `async def`. LiveKit's
+tool_executor.py always does `output = await tool(*fnc_args, **fnc_kwargs)`
+regardless of whether the tool itself needs to await anything. A plain
+`def` method returns its value immediately (not a coroutine), which
+causes `TypeError: object str can't be used in 'await' expression` at
+call time. The voice_db.* calls below are synchronous (supabase-py sync
+client), so no internal `await` is needed inside the bodies — only the
+method signature needs to be async.
 """
 
 import logging
@@ -29,7 +38,7 @@ class ConcertBookingTools:
     """Tools exposed to the LLM agent for booking concert tickets over a phone call."""
 
     @function_tool
-    def search_events(self, query: str = "", city: str = "") -> str:
+    async def search_events(self, query: str = "", city: str = "") -> str:
         """Search for upcoming events by artist name and/or city. Use this first to find
         the event_id before checking tickets or booking.
 
@@ -42,7 +51,7 @@ class ConcertBookingTools:
         return res["message"]
 
     @function_tool
-    def get_ticket_categories(self, event_id: str) -> str:
+    async def get_ticket_categories(self, event_id: str) -> str:
         """Get ticket categories, prices, and seat availability for a specific event.
         Requires the event_id from search_events.
 
@@ -54,7 +63,7 @@ class ConcertBookingTools:
         return res["message"]
 
     @function_tool
-    def book_ticket(
+    async def book_ticket(
         self,
         event_id: str,
         category: str,
@@ -77,7 +86,7 @@ class ConcertBookingTools:
         return res["message"]
 
     @function_tool
-    def get_booking_status(self, caller_phone: str) -> str:
+    async def get_booking_status(self, caller_phone: str) -> str:
         """Check the status of a caller's existing bookings using their phone number.
 
         Args:
@@ -88,7 +97,7 @@ class ConcertBookingTools:
         return res["message"]
 
     @function_tool
-    def cancel_booking(self, caller_phone: str, booking_id: str) -> str:
+    async def cancel_booking(self, caller_phone: str, booking_id: str) -> str:
         """Cancel one of the caller's existing bookings. Must confirm the booking_id with
         the caller (from get_booking_status) before calling this.
 
@@ -114,7 +123,7 @@ class ConcertBookingToolsWeb:
         self.user_id = user_id
 
     @function_tool
-    def search_events(self, query: str = "", city: str = "") -> str:
+    async def search_events(self, query: str = "", city: str = "") -> str:
         """Search for upcoming events by artist name and/or city. Use this first to find
         the event_id before checking tickets or booking.
 
@@ -127,7 +136,7 @@ class ConcertBookingToolsWeb:
         return res["message"]
 
     @function_tool
-    def get_ticket_categories(self, event_id: str) -> str:
+    async def get_ticket_categories(self, event_id: str) -> str:
         """Get ticket categories, prices, and seat availability for a specific event.
         Requires the event_id from search_events.
 
@@ -139,7 +148,7 @@ class ConcertBookingToolsWeb:
         return res["message"]
 
     @function_tool
-    def book_ticket(self, event_id: str, category: str, seats: int) -> str:
+    async def book_ticket(self, event_id: str, category: str, seats: int) -> str:
         """Book concert tickets for the logged-in user. Must collect event_id, category,
         and number of seats, then confirm out loud before calling this.
 
@@ -153,14 +162,14 @@ class ConcertBookingToolsWeb:
         return res["message"]
 
     @function_tool
-    def get_booking_status(self) -> str:
+    async def get_booking_status(self) -> str:
         """Check the status of the logged-in user's existing bookings."""
         logger.info(f"[web:{self.user_id}] Executing Tool get_booking_status")
         res = voice_db.get_booking_status_for_user(self.user_id)
         return res["message"]
 
     @function_tool
-    def cancel_booking(self, booking_id: str) -> str:
+    async def cancel_booking(self, booking_id: str) -> str:
         """Cancel one of the logged-in user's existing bookings. Must confirm the
         booking_id with them (from get_booking_status) before calling this.
 

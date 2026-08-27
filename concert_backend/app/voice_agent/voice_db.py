@@ -243,7 +243,7 @@ def cancel_booking_for_user(user_id: str, booking_id: str) -> dict:
     user_id, same rule enforced in booking_routes.cancel_booking."""
     result = (
         supabase_admin.table("bookings")
-        .update({"status": "Cancelled"})
+        .update({"status": "Cancelled", "payment_status": "Cancelled"})
         .eq("booking_id", booking_id)
         .eq("user_id", user_id)
         .execute()

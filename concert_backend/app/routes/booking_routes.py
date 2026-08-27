@@ -277,7 +277,7 @@ def cancel_booking(booking_id: str, current_user: dict = Depends(get_current_use
     """
     result = (
         supabase_admin.table("bookings")
-        .update({"status": "Cancelled"})
+        .update({"status": "Cancelled", "payment_status": "Cancelled"})
         .eq("booking_id", booking_id)
         .eq("user_id", current_user["user_id"])
         .execute()
