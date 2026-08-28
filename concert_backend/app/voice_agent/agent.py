@@ -13,6 +13,7 @@ Preserved from the original implementation:
 - Session transcript + summary persistence
 """
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Any
@@ -26,6 +27,7 @@ from livekit.agents import (
     WorkerOptions,
     cli,
     llm,
+    utils,
 )
 from livekit import rtc
 from livekit.plugins import cartesia, openai, silero
@@ -219,6 +221,8 @@ class ConcertVoiceAgent(Agent):
         tools: list[Any],
         greeting: str,
         greeting_audio: list[rtc.AudioFrame] | None = None,
+        tts_english=None,
+        tts_hindi=None,
     ):
         super().__init__(
             instructions=instructions,
@@ -226,6 +230,8 @@ class ConcertVoiceAgent(Agent):
         )
         self._greeting = greeting
         self._greeting_audio = greeting_audio
+        self._tts_english = tts_english
+        self._tts_hindi = tts_hindi
 
     async def on_enter(self) -> None:
         logger.info("Agent entered the LiveKit session; delivering greeting.")
@@ -244,6 +250,68 @@ class ConcertVoiceAgent(Agent):
                 self._greeting,
                 allow_interruptions=True,
             )
+
+    async def tts_node(self, text, model_settings):
+        """
+        Picks between a Hindi and an English Cartesia voice per response,
+        mirroring tata_voice_server.py's tts_english/tts_hindi +
+        _detect_hindi() pattern — while preserving streaming latency.
+
+        Only buffers a small PREFIX of the response (until DETECT_CHARS
+        chars or the first sentence-ending punctuation, whichever comes
+        first) to decide the language, then opens the chosen TTS stream and
+        pushes the rest of the text as it arrives from the LLM — same
+        incremental push_text()/end_input() pattern as the framework's own
+        Agent.default.tts_node(). This avoids waiting for the full LLM turn
+        before speaking (which an earlier version of this fix did).
+
+        Trade-off: if a reply code-switches language partway through, the
+        whole utterance still plays in whichever voice the opening ~40
+        chars matched (Cartesia can't switch voice mid-stream, and neither
+        could the full-buffer version this replaces) — acceptable since the
+        system prompt already asks the model to pick one language per turn.
+        """
+        if self._tts_english is None or self._tts_hindi is None:
+            # Dual-TTS not configured (e.g. missing CARTESIA_API_KEY) — fall
+            # back to the framework's normal streaming behavior.
+            async for frame in Agent.default.tts_node(self, text, model_settings):
+                yield frame
+            return
+
+        DETECT_CHARS = 40
+        SENTENCE_ENDERS = (".", "!", "?", "\u0964")  # includes Hindi danda
+
+        text_iter = text.__aiter__()
+        prefix = ""
+        async for chunk in text_iter:
+            prefix += chunk
+            if len(prefix) >= DETECT_CHARS or any(p in prefix for p in SENTENCE_ENDERS):
+                break
+
+        if not prefix.strip():
+            return
+
+        chosen_tts = self._tts_hindi if _detect_hindi(prefix) else self._tts_english
+        logger.info(
+            f"tts_node: routing to {'Hindi' if chosen_tts is self._tts_hindi else 'English'} "
+            f"Cartesia voice (decided on first {len(prefix)} chars)"
+        )
+
+        conn_options = self.session.conn_options.tts_conn_options
+        async with chosen_tts.stream(conn_options=conn_options) as stream:
+
+            async def _forward_input() -> None:
+                stream.push_text(prefix)
+                async for chunk in text_iter:
+                    stream.push_text(chunk)
+                stream.end_input()
+
+            forward_task = asyncio.create_task(_forward_input())
+            try:
+                async for ev in stream:
+                    yield ev.frame
+            finally:
+                await utils.aio.cancel_and_wait(forward_task)
 
 
 def _tool_list(toolset: Any) -> list[Any]:
@@ -384,26 +452,27 @@ async def entrypoint(ctx: JobContext):
 
     logger.info("Using Cartesia TTS voice=%s", voice_id)
 
-    # NOTE (flagged, not auto-fixed — needs your decision, see chat):
-    # this is hardcoded to language="en". The old VoicePipelineAgent-era
-    # implementation had a DynamicCartesiaTTS wrapper that ran TWO Cartesia
-    # TTS instances (language="en" and language="hi") and picked one per
-    # response based on _detect_hindi(text) (already defined above but
-    # UNUSED in this file). As written, every reply — even a Hindi/Hinglish
-    # one the LLM correctly generates per the system prompt — gets synthesized
-    # with the English model, which will mispronounce Devanagari text.
-    # A 1.7-native fix needs a wrapper around cartesia.TTS matching this
-    # version's real TTS/StreamAdapter ABI, which we haven't verified against
-    # your installed 1.7.0 the way we verified function_tool below — don't
-    # want to guess-write it blind and risk it crashing at runtime. Flagging
-    # for you to confirm you want it back, then verify against the docs when
-    # picked up.
-    tts_provider = cartesia.TTS(
+    # Two Cartesia TTS instances (English + Hindi), picked per-response by
+    # ConcertVoiceAgent.tts_node() via _detect_hindi(). Mirrors
+    # tata_voice_server.py's tts_english/tts_hindi pattern — restores the
+    # Hindi/Hinglish pronunciation support that was lost when this file was
+    # rewritten for livekit-agents 1.7 (it was hardcoded to language="en").
+    tts_english = cartesia.TTS(
         api_key=config.CARTESIA_API_KEY,
         voice=voice_id,
         language="en",
         model="sonic-2",
     )
+    tts_hindi = cartesia.TTS(
+        api_key=config.CARTESIA_API_KEY,
+        voice=voice_id,
+        language="hi",
+        model="sonic-2",
+    )
+    # AgentSession still needs ONE tts= as its baseline/fallback (used by
+    # Agent.default.tts_node() if tts_node ever falls through, and for
+    # framework bookkeeping like prewarm()) — English is the safe default.
+    tts_provider = tts_english
 
     logger.info("Loading Silero VAD")
 
@@ -436,6 +505,8 @@ async def entrypoint(ctx: JobContext):
         tools=_tool_list(toolset),
         greeting=greeting,
         greeting_audio=greeting_audio,
+        tts_english=tts_english,
+        tts_hindi=tts_hindi,
     )
 
     session = AgentSession(

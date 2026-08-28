@@ -618,10 +618,15 @@ DYNAMIC VOICE & CONVERSATION RULES
         # - activation_threshold 0.65: trigger on speech, filter line clicks
         # - min_silence_duration 1.0s: wait 1.0 seconds of silence to prevent cutting off callers
         #   when they pause to read out phone numbers or name spellings.
+        # - min_speech_duration 0.2s: ignore speech blips shorter than 200ms (mic pops,
+        #   breathing, line noise). Every VAD false-trigger still gets forwarded to Cartesia
+        #   Ink-Whisper, which bills 1 credit per second of audio SENT regardless of whether
+        #   real speech was in it — this cuts down on STT credits spent on non-speech.
         self.vad = silero.VAD.load(
             sample_rate=8000,
             activation_threshold=0.65,
-            min_silence_duration=1.00
+            min_silence_duration=1.00,
+            min_speech_duration=0.2
         )
         self.vad_stream = self.vad.stream()
 
