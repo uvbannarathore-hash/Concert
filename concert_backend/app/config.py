@@ -20,6 +20,14 @@ LIVEKIT_URL = os.getenv("LIVEKIT_URL")  # e.g. wss://your-project.livekit.cloud
 LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY")
 LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET")
 
+# Google Gemini (native Python admin + customer AI agents - replaces the
+# old n8n "AI Agent" + "Google Gemini Chat Model" nodes)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+# Telegram bot (customer assistant, Telegram channel - replaces n8n's
+# "Telegram Trigger" + "Send a text message" nodes)
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
 if not SUPABASE_URL or not SUPABASE_ANON_KEY:
     raise RuntimeError(
         "SUPABASE_URL and SUPABASE_ANON_KEY must be set in your .env file"

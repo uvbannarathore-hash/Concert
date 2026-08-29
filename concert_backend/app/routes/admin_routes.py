@@ -1,10 +1,9 @@
 import time
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from app.admin_auth import get_current_admin
 from app.supabase_client import supabase_admin
-from app.config import N8N_ADMIN_WEBHOOK_URL
+from app.agents import admin_agent
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -17,34 +16,34 @@ async def admin_chat(
     image: UploadFile = File(None),
     latitude: float = Form(None),
     longitude: float = Form(None),
+    session_id: str = Form(None),
     admin=Depends(get_current_admin),
 ):
     """
-    Forwards the admin's message to the n8n Admin Assistant webhook.
+    Runs the admin assistant natively (see app/agents/admin_agent.py) - no
+    longer forwards to n8n.
 
     get_current_admin has ALREADY verified this request comes from a real,
-    logged-in admin (is_admin=true) before this function even runs - the
-    n8n Admin Assistant workflow itself does not re-check permissions, it
-    trusts that this backend route is the only thing allowed to call it.
+    logged-in admin (is_admin=true) before this function even runs.
 
     If an image is attached (e.g. an event poster), it is uploaded to the
     Supabase "event-images" storage bucket first, and its public URL is
-    embedded into the message text as "[Uploaded image URL: ...]" before
-    forwarding to n8n. The AI Agent in n8n is instructed to detect this
-    marker and pass the URL along when creating/updating an event.
+    embedded into the message text as "[Uploaded image URL: ...]" - the
+    admin agent's system prompt is instructed to detect this marker and
+    pass the URL along when creating/updating an event.
 
     If a venue location (latitude/longitude) is attached - e.g. picked via
-    Google Places Autocomplete on the frontend - it is sent as separate
-    body fields. The n8n workflow's own "Enrich With Location" node embeds
-    it into the message as "[Venue Location: lat,lng]" before the AI Agent
-    runs, so no enrichment is needed on this side.
-    """
-    if not N8N_ADMIN_WEBHOOK_URL:
-        raise HTTPException(
-            status_code=500,
-            detail="Admin assistant is not configured (N8N_ADMIN_WEBHOOK_URL missing)",
-        )
+    Google Places Autocomplete on the frontend - it's embedded the same way
+    as "[Venue Location: lat,lng]" (this used to be done by n8n's "Enrich
+    With Location" node - now done directly here since there's no
+    intermediate workflow anymore).
 
+    session_id: identifies ONE conversation/chat window, distinct from
+    admin_user_id (which identifies WHO is chatting) - see
+    app/agents/memory.py. Falls back to admin_user_id if not provided, so
+    older frontend builds without the "New Chat" session_id fix still work,
+    just without per-conversation isolation.
+    """
     enriched_message = message
 
     if image is not None:
@@ -76,39 +75,19 @@ async def admin_chat(
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Image upload failed: {e}")
 
-        enriched_message = f"{message} [Uploaded image URL: {public_url}]"
-
-    body = {
-        "admin_user_id": admin["user_id"],
-        "message": enriched_message,
-    }
+        enriched_message = f"{enriched_message} [Uploaded image URL: {public_url}]"
 
     if latitude is not None and longitude is not None:
-        body["latitude"] = latitude
-        body["longitude"] = longitude
+        enriched_message = f"{enriched_message} [Venue Location: {latitude},{longitude}]"
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        try:
-            response = await client.post(N8N_ADMIN_WEBHOOK_URL, json=body)
-            response.raise_for_status()
-        except httpx.HTTPError as e:
-            raise HTTPException(status_code=502, detail=f"Failed to reach admin assistant: {e}")
+    effective_session_id = session_id or admin["user_id"]
 
-        if not response.text.strip():
-            raise HTTPException(
-                status_code=502,
-                detail="Admin assistant (n8n) returned an empty response. "
-                       "Check that the n8n workflow is Active/Published and that "
-                       "N8N_ADMIN_WEBHOOK_URL points to the production webhook, not the test one.",
-            )
-
-        try:
-            return response.json()
-        except ValueError:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Admin assistant returned invalid JSON: {response.text[:300]}",
-            )
+    reply = await admin_agent.handle_message(
+        admin_user_id=admin["user_id"],
+        session_id=effective_session_id,
+        message=enriched_message,
+    )
+    return {"reply": reply}
 
 
 # ---------- Events ----------
