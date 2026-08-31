@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
+import { Link, useLocation } from 'react-router-dom'
 import { api } from '../lib/api'
 import { createClient } from '@supabase/supabase-js'
 
@@ -40,12 +41,13 @@ function linkify(text) {
 }
 
 export default function ChatWidget() {
-  const loggedIn = api.isLoggedIn()
+  const location = useLocation()
+  const [loggedIn, setLoggedIn] = useState(api.isLoggedIn())
   const [isOpen, setIsOpen] = useState(false)
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
-      text: "Hey! I'm your booking assistant. Ask me to find concerts, check seat availability, view your tickets, or handle reservation changes.",
+      text: "Hey! I'm your AI booking assistant. Ask me to find concerts, check seat availability, view your tickets, or handle reservation questions!",
     },
   ])
   const [input, setInput] = useState('')
@@ -55,12 +57,22 @@ export default function ChatWidget() {
   const bottomRef = useRef(null)
   const drawerRef = useRef(null)
 
-  // Scroll to bottom
+  // Keep loggedIn state in sync with route changes or storage events
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const checkLogin = () => setLoggedIn(api.isLoggedIn())
+    checkLogin()
+    window.addEventListener('storage', checkLogin)
+    return () => window.removeEventListener('storage', checkLogin)
+  }, [location.pathname])
+
+  // Scroll to bottom when messages update
+  useEffect(() => {
+    if (isOpen) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
   }, [messages, sending, isOpen])
 
-  // Listen for realtime booking confirmations
+  // Listen for realtime booking confirmations when logged in
   useEffect(() => {
     if (!loggedIn) return
 
@@ -108,16 +120,19 @@ export default function ChatWidget() {
         setIsOpen(false)
       }
     }
-    document.addEventListener("mousedown", handleClickOutside)
-    return () => document.removeEventListener("mousedown", handleClickOutside)
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
-
-  if (!loggedIn) return null
 
   async function handleSend(e) {
     e.preventDefault()
     const text = input.trim()
     if (!text || sending) return
+
+    if (!loggedIn) {
+      setError('Please log in to chat with the assistant.')
+      return
+    }
 
     setMessages((m) => [...m, { role: 'user', text }])
     setInput('')
@@ -140,13 +155,19 @@ export default function ChatWidget() {
     }
   }
 
+  // Only render floating chat assistant when the user is logged in
+  if (!loggedIn) {
+    return null
+  }
+
   return (
     <>
       {/* Floating Action Button (FAB) */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="user-chat-fab fixed bottom-6 right-6 z-50 w-14 h-14 rounded-full bg-gradient-to-r from-spot to-[#ff5c84] text-void flex items-center justify-center shadow-[0_6px_24px_rgba(255,61,110,0.4)] hover:scale-110 active:scale-95 transition-all duration-300 border border-white/10 outline-none"
+        className="user-chat-fab fixed bottom-6 right-6 z-50 w-14 h-14 rounded-full bg-gradient-to-r from-spot to-[#ff5c84] text-void flex items-center justify-center shadow-[0_6px_24px_rgba(255,61,110,0.4)] hover:scale-110 active:scale-95 transition-all duration-300 border border-white/10 outline-none cursor-pointer"
         title="Chat Booking Assistant"
+        aria-label="Open Chat Assistant"
       >
         <span className="text-xl">{isOpen ? '✕' : '💬'}</span>
         {!isOpen && (
@@ -161,19 +182,22 @@ export default function ChatWidget() {
       {isOpen && (
         <div
           ref={drawerRef}
-          className="fixed bottom-24 right-6 z-50 w-96 h-[520px] max-w-[calc(100vw-48px)] glass-card bg-stage/95 rounded-2xl border border-white/[0.08] shadow-2xl p-4 flex flex-col justify-between animate-scale-in"
+          className="fixed bottom-24 right-6 z-50 w-96 h-[520px] max-w-[calc(100vw-48px)] glass-card bg-stage/95 rounded-2xl border border-white/[0.08] shadow-2xl p-4 flex flex-col justify-between animate-scale-in backdrop-blur-xl"
         >
           {/* Header */}
           <div className="border-b border-white/[0.04] pb-3 mb-3 flex items-center justify-between">
-            <div>
-              <h3 className="text-xs font-mono tracking-wider text-spot uppercase">Concert Assistant</h3>
-              <p className="text-[10px] text-haze">Find shows & coordinate bookings</p>
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-go animate-pulse"></span>
+              <div>
+                <h3 className="text-xs font-mono tracking-wider text-spot uppercase font-bold">Concert Assistant</h3>
+                <p className="text-[10px] text-haze">Find shows & coordinate bookings</p>
+              </div>
             </div>
             <button 
               onClick={() => setIsOpen(false)}
-              className="text-haze hover:text-paper text-xs"
+              className="text-haze hover:text-paper text-xs font-mono px-2 py-1 rounded hover:bg-white/[0.05] transition"
             >
-              Minimize
+              ✕
             </button>
           </div>
 
@@ -206,6 +230,7 @@ export default function ChatWidget() {
                   </div>
                 )
               })}
+
               {sending && (
                 <div className="flex gap-2.5 items-end justify-start animate-pulse">
                   <span className="w-6 h-6 rounded-full border border-spot2/20 bg-spot2/5 text-spot2 font-mono text-[10px] flex items-center justify-center flex-shrink-0">
@@ -233,7 +258,11 @@ export default function ChatWidget() {
               placeholder="Ask anything (e.g. 'Show me concerts')..."
               disabled={sending}
             />
-            <button type="submit" disabled={sending || !input.trim()} className="btn-spot !px-4 !py-2 text-xs font-bold disabled:opacity-40">
+            <button 
+              type="submit" 
+              disabled={sending || !input.trim()} 
+              className="btn-spot !px-4 !py-2 text-xs font-bold disabled:opacity-40"
+            >
               Send
             </button>
           </form>
