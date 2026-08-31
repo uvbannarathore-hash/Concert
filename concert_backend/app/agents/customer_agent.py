@@ -113,12 +113,19 @@ def _resolve_telegram_user(chat_id: str, telegram_name: str | None) -> tuple[str
 def _build_bound_handlers(user_id: str, chat_id: str | None) -> dict:
     """Creates per-request tool handlers with user_id (and chat_id, for
     Telegram-only linking) baked in via closures, so the AI can never
-    supply or override its own user_id."""
+    supply or override its own user_id.
+
+    source is derived here from which handler entry point called us
+    (chat_id is only ever set by handle_telegram_message) - never from the
+    AI - so booking_source on the resulting row always reflects the real
+    channel, which is what supabase/functions/send-booking-notifications
+    relies on to decide whether to send a Telegram confirmation."""
+    source = "telegram" if chat_id else "website"
     return {
         "search_events": _BASE_HANDLERS_SEARCH,
         "get_ticket_categories": _BASE_HANDLERS_GET_CATEGORIES,
         "book_ticket_transaction": lambda event_id, category, seats: _BASE_HANDLERS["book_ticket_transaction"](
-            user_id, event_id, category, seats
+            user_id, event_id, category, seats, source=source
         ),
         "get_user_booking_history": lambda: _BASE_HANDLERS["get_user_booking_history"](user_id),
         "cancel_booking": lambda booking_id: _BASE_HANDLERS["cancel_booking"](user_id, booking_id),

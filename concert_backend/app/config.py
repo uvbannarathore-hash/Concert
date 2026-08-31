@@ -6,8 +6,6 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL")
-N8N_ADMIN_WEBHOOK_URL = os.getenv("N8N_ADMIN_WEBHOOK_URL")
 
 # Razorpay (Test/Sandbox first — swap key values in .env when going live,
 # the code below never changes between test and live mode)

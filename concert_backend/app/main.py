@@ -9,7 +9,7 @@ app = FastAPI(title="Concert Booking Assistant API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://events-two-phi.vercel.app","http://localhost:5173",
-        "http://127.0.0.1:5173",],
+        "http://127.0.0.1:5173","https://events-o0v9jffi9-yuvraj-e83c.vercel.app",],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

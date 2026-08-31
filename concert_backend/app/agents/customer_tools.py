@@ -48,8 +48,8 @@ def get_ticket_categories(event_id: str) -> dict:
     return voice_db.get_ticket_categories(event_id)
 
 
-def book_ticket_transaction(user_id: str, event_id: str, category: str, seats: int) -> dict:
-    return voice_db.book_ticket_for_user(user_id, event_id, category, seats)
+def book_ticket_transaction(user_id: str, event_id: str, category: str, seats: int, source: str = "website") -> dict:
+    return voice_db.book_ticket_for_user(user_id, event_id, category, seats, source=source)
 
 
 def get_user_booking_history(user_id: str) -> dict:

@@ -121,9 +121,19 @@ def get_ticket_categories(event_id: str) -> dict:
 # workflow, so seat-locking and payment confirmation logic isn't duplicated.
 # ---------------------------------------------------------------------------
 def _create_booking_and_payment_link(user_id: str, event_id: str, category: str, seats: int,
-                                      contact_phone: str | None, contact_name: str | None) -> dict:
+                                      contact_phone: str | None, contact_name: str | None,
+                                      source: str) -> dict:
     """Shared core: creates the pending booking (RPC) + Razorpay payment link. Used by
-    both the phone-call flow (book_ticket) and the website flow (book_ticket_for_user)."""
+    the phone-call flow (book_ticket), the website flow, and the Telegram flow
+    (both via book_ticket_for_user).
+
+    source: the channel this booking was made through - "voice_call", "website",
+    or "telegram". This is stored on the booking row and is what
+    supabase/functions/send-booking-notifications reads to decide whether to
+    send a Telegram confirmation (it only does so when source == "telegram",
+    or when the user has separately opted in via notify_telegram_for_website).
+    It must reflect the ACTUAL channel, not be guessed from unrelated fields
+    like whether a phone number happens to be on file."""
     rpc_result = supabase_admin.rpc(
         "book_ticket_transaction",
         {
@@ -156,7 +166,7 @@ def _create_booking_and_payment_link(user_id: str, event_id: str, category: str,
     payment_link = razorpay_client.payment_link.create(link_payload)
 
     supabase_admin.table("bookings").update(
-        {"razorpay_payment_link_id": payment_link["id"], "booking_source": "voice_call" if contact_phone else "voice_website"}
+        {"razorpay_payment_link_id": payment_link["id"], "booking_source": source}
     ).eq("booking_id", booking_id).execute()
 
     return {
@@ -177,12 +187,20 @@ def book_ticket(caller_phone: str, event_id: str, category: str, seats: int, cal
     if not identity["success"]:
         return identity
 
-    return _create_booking_and_payment_link(identity["user_id"], event_id, category, seats, caller_phone, caller_name)
+    return _create_booking_and_payment_link(
+        identity["user_id"], event_id, category, seats, caller_phone, caller_name, source="voice_call"
+    )
 
 
-def book_ticket_for_user(user_id: str, event_id: str, category: str, seats: int) -> dict:
-    """Website STS flow: caller is already an authenticated user (LiveKit participant
-    identity = user_id from the /voice/token JWT), so no phone lookup/guest creation needed."""
+def book_ticket_for_user(user_id: str, event_id: str, category: str, seats: int, source: str = "website") -> dict:
+    """Website/Telegram flow: caller is already identified (website: authenticated
+    Supabase user; Telegram: resolved/auto-created profile - see customer_agent.py),
+    so no phone lookup/guest creation needed.
+
+    source defaults to "website" for backward compatibility with existing callers
+    (e.g. the on-site voice widget in voice_agent/tools.py's ConcertBookingToolsWeb)
+    that don't pass it explicitly. app/agents/customer_tools.py passes "telegram"
+    explicitly when the request came from the Telegram bot."""
     profile = supabase_admin.table("users").select("phone, name, is_admin").eq("user_id", user_id).execute()
     if not profile.data:
         return {"success": False, "message": "Could not find your account."}
@@ -191,7 +209,9 @@ def book_ticket_for_user(user_id: str, event_id: str, category: str, seats: int)
 
     contact_phone = profile.data[0].get("phone")
     contact_name = profile.data[0].get("name")
-    return _create_booking_and_payment_link(user_id, event_id, category, seats, contact_phone, contact_name)
+    return _create_booking_and_payment_link(
+        user_id, event_id, category, seats, contact_phone, contact_name, source=source
+    )
 
 
 def get_booking_status(caller_phone: str) -> dict:

@@ -19,14 +19,21 @@ bound FunctionTool objects.
 
 NOTE: every tool method here MUST be declared `async def`. LiveKit's
 tool_executor.py always does `output = await tool(*fnc_args, **fnc_kwargs)`
-regardless of whether the tool itself needs to await anything. A plain
-`def` method returns its value immediately (not a coroutine), which
-causes `TypeError: object str can't be used in 'await' expression` at
-call time. The voice_db.* calls below are synchronous (supabase-py sync
-client), so no internal `await` is needed inside the bodies — only the
-method signature needs to be async.
+regardless of whether the tool itself needs to await anything.
+
+LATENCY FIX: the voice_db.* calls are synchronous (supabase-py sync
+client) blocking HTTP round-trips. Calling them directly inside an
+`async def` does NOT make them non-blocking - they still run on and
+block the single asyncio event loop that LiveKit's whole audio/VAD/turn
+pipeline shares, for the entire duration of the HTTP request (commonly
+100ms-1s+). Every tool call below now wraps its voice_db call in
+asyncio.to_thread(...), which runs it in a worker thread instead,
+keeping the event loop free to keep processing audio while the DB/HTTP
+call is in flight - this was contributing to the "every response feels
+a bit slow" latency, especially on any turn that invokes a tool.
 """
 
+import asyncio
 import logging
 from livekit.agents import function_tool
 from app.voice_agent import voice_db
@@ -47,7 +54,7 @@ class ConcertBookingTools:
             city: City to filter by, e.g. 'Indore'. Optional.
         """
         logger.info(f"Executing Tool search_events query={query}, city={city}")
-        res = voice_db.search_events(query or None, city or None)
+        res = await asyncio.to_thread(voice_db.search_events, query or None, city or None)
         return res["message"]
 
     @function_tool
@@ -59,7 +66,7 @@ class ConcertBookingTools:
             event_id: The event_id returned by search_events.
         """
         logger.info(f"Executing Tool get_ticket_categories event_id={event_id}")
-        res = voice_db.get_ticket_categories(event_id)
+        res = await asyncio.to_thread(voice_db.get_ticket_categories, event_id)
         return res["message"]
 
     @function_tool
@@ -82,7 +89,9 @@ class ConcertBookingTools:
             caller_name: The caller's name.
         """
         logger.info(f"Executing Tool book_ticket event_id={event_id}, category={category}, seats={seats}, phone={caller_phone}")
-        res = voice_db.book_ticket(caller_phone, event_id, category, seats, caller_name or None)
+        res = await asyncio.to_thread(
+            voice_db.book_ticket, caller_phone, event_id, category, seats, caller_name or None
+        )
         return res["message"]
 
     @function_tool
@@ -93,7 +102,7 @@ class ConcertBookingTools:
             caller_phone: The caller's phone number.
         """
         logger.info(f"Executing Tool get_booking_status phone={caller_phone}")
-        res = voice_db.get_booking_status(caller_phone)
+        res = await asyncio.to_thread(voice_db.get_booking_status, caller_phone)
         return res["message"]
 
     @function_tool
@@ -106,7 +115,7 @@ class ConcertBookingTools:
             booking_id: The booking_id to cancel.
         """
         logger.info(f"Executing Tool cancel_booking phone={caller_phone}, booking_id={booking_id}")
-        res = voice_db.cancel_booking(caller_phone, booking_id)
+        res = await asyncio.to_thread(voice_db.cancel_booking, caller_phone, booking_id)
         return res["message"]
 
 
@@ -132,7 +141,7 @@ class ConcertBookingToolsWeb:
             city: City to filter by, e.g. 'Indore'. Optional.
         """
         logger.info(f"[web:{self.user_id}] Executing Tool search_events query={query}, city={city}")
-        res = voice_db.search_events(query or None, city or None)
+        res = await asyncio.to_thread(voice_db.search_events, query or None, city or None)
         return res["message"]
 
     @function_tool
@@ -144,7 +153,7 @@ class ConcertBookingToolsWeb:
             event_id: The event_id returned by search_events.
         """
         logger.info(f"[web:{self.user_id}] Executing Tool get_ticket_categories event_id={event_id}")
-        res = voice_db.get_ticket_categories(event_id)
+        res = await asyncio.to_thread(voice_db.get_ticket_categories, event_id)
         return res["message"]
 
     @function_tool
@@ -158,14 +167,14 @@ class ConcertBookingToolsWeb:
             seats: Number of seats to book.
         """
         logger.info(f"[web:{self.user_id}] Executing Tool book_ticket event_id={event_id}, category={category}, seats={seats}")
-        res = voice_db.book_ticket_for_user(self.user_id, event_id, category, seats)
+        res = await asyncio.to_thread(voice_db.book_ticket_for_user, self.user_id, event_id, category, seats)
         return res["message"]
 
     @function_tool
     async def get_booking_status(self) -> str:
         """Check the status of the logged-in user's existing bookings."""
         logger.info(f"[web:{self.user_id}] Executing Tool get_booking_status")
-        res = voice_db.get_booking_status_for_user(self.user_id)
+        res = await asyncio.to_thread(voice_db.get_booking_status_for_user, self.user_id)
         return res["message"]
 
     @function_tool
@@ -177,5 +186,5 @@ class ConcertBookingToolsWeb:
             booking_id: The booking_id to cancel.
         """
         logger.info(f"[web:{self.user_id}] Executing Tool cancel_booking booking_id={booking_id}")
-        res = voice_db.cancel_booking_for_user(self.user_id, booking_id)
+        res = await asyncio.to_thread(voice_db.cancel_booking_for_user, self.user_id, booking_id)
         return res["message"]

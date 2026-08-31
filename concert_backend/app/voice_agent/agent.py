@@ -7,7 +7,7 @@ with Agent + AgentSession + function_tool.
 Preserved from the original implementation:
 - Cartesia Ink-Whisper STT
 - Dynamic English/Hindi Cartesia TTS
-- Gemini -> Gemini secondary -> Groq -> Ollama LLM fallback
+- Groq (openai/gpt-oss-20b) -> Gemini -> Gemini secondary LLM fallback
 - SIP and authenticated website sessions
 - Existing voice_db booking functions
 - Session transcript + summary persistence
@@ -88,18 +88,44 @@ def _build_llm_fallback() -> llm.LLM:
     Build the LLM chain with the most reliable/available provider first.
 
     Order:
-      1. Groq
+      1. Groq (llama-3.3-70b-versatile)
       2. Gemini
       3. Gemini secondary model
-      4. Ollama
 
     Gemini quota errors therefore do not block normal voice conversations
     when a working Groq key is configured.
+
+    MODEL CHOICE: llama-3.3-70b-versatile and llama-3.1-8b-instant were
+    tried here briefly to get more free-tier TPM headroom than
+    openai/gpt-oss-20b's 8,000 TPM ceiling, but BOTH Llama models were
+    shut down by Groq on 2026-08-16 (confirmed via a 404 model_not_found
+    error when actually deployed) - third-party pricing/rate-limit
+    write-ups found via search still listed them as available, but were
+    describing pre-shutdown state despite looking recently dated. Reverted
+    to openai/gpt-oss-20b, the same model that was working (just hitting
+    its TPM ceiling under real conversational load) before this file was
+    ever touched - a known-good choice beats guessing another model name
+    from secondary sources a second time.
+
+    To find a genuinely better-TPM model on the CURRENT Groq catalog
+    (rather than guessing further), run this against your own account,
+    which reflects your actual live access, not a blog post:
+        curl -X GET "https://api.groq.com/openai/v1/models" \
+          -H "Authorization: Bearer $GROQ_API_KEY"
+    or check https://console.groq.com/docs/models directly, then update
+    the model= string below.
+
+    Ollama was previously a 4th fallback here but has been removed - it was
+    never actually reachable in this deployment (every attempt logged a
+    connection-refused/timeout), so it was pure dead weight adding a
+    guaranteed multi-second stall to every fallback cascade that reached it,
+    with zero chance of ever succeeding. Add a real, reachable local model
+    back here later if one is actually running.
     """
     providers: list[llm.LLM] = []
 
     if config.GROQ_API_KEY:
-        logger.info("Fallback Chain: loading Groq provider FIRST")
+        logger.info("Fallback Chain: loading Groq provider FIRST (openai/gpt-oss-20b)")
         providers.append(
             openai.LLM(
                 model="openai/gpt-oss-20b",
@@ -130,24 +156,9 @@ def _build_llm_fallback() -> llm.LLM:
             )
         )
 
-    if config.OLLAMA_URL:
-        logger.info("Fallback Chain: loading Ollama provider")
-        ollama_base = config.OLLAMA_URL.rstrip("/")
-        if not ollama_base.endswith("/v1"):
-            ollama_base += "/v1"
-
-        providers.append(
-            openai.LLM(
-                model="llama3.1:8b",
-                base_url=ollama_base,
-                api_key="ollama-local",
-            )
-        )
-
     if not providers:
         raise ValueError(
-            "No LLM providers initialized. Set GROQ_API_KEY, "
-            "GOOGLE_API_KEY, or OLLAMA_URL."
+            "No LLM providers initialized. Set GROQ_API_KEY or GOOGLE_API_KEY."
         )
 
     logger.info(
@@ -157,7 +168,14 @@ def _build_llm_fallback() -> llm.LLM:
 
     return llm.FallbackAdapter(
         providers,
-        attempt_timeout=8.0,
+        # LATENCY: this was 8.0s - if the primary provider (Groq) is ever
+        # slow to respond or briefly unavailable, the caller would sit in
+        # silence for up to 8 full seconds before the agent even tried
+        # falling back to Gemini. 3.5s still gives a normal Groq response
+        # plenty of room (it's typically sub-second), but fails over much
+        # faster on the turns where it isn't, instead of stalling the whole
+        # conversation.
+        attempt_timeout=3.5,
         max_retry_per_llm=0,
         retry_interval=0.25,
         retry_on_chunk_sent=False,
@@ -481,9 +499,19 @@ async def entrypoint(ctx: JobContext):
     # forwarded to Cartesia Ink-Whisper, which bills 1 credit per second of
     # audio SENT regardless of whether real speech was in it — this cuts
     # down on STT credits spent transcribing non-speech.
+    #
+    # LATENCY: min_silence_duration is a flat delay added to EVERY single
+    # turn (the agent waits this long after the caller stops talking before
+    # deciding they're actually done and starting to respond) - it was 0.5s,
+    # meaning half a second of dead air was baked into every response no
+    # matter what. Lowered to 0.35s, which still comfortably avoids cutting
+    # people off mid-sentence for a normal speaking pace, while shaving a
+    # noticeable, universal chunk off the "every response feels a bit slow"
+    # complaint. If callers start getting cut off mid-thought, raise this
+    # back up in 0.05 increments rather than jumping straight back to 0.5.
     silero_vad = silero.VAD.load(
         activation_threshold=0.6,
-        min_silence_duration=0.5,
+        min_silence_duration=0.35,
         min_speech_duration=0.2,
         prefix_padding_duration=0.3,
     )
@@ -520,6 +548,38 @@ async def entrypoint(ctx: JobContext):
     session_id = ctx.room.name
     session_start = datetime.now()
     transcript_messages: list[dict[str, str]] = []
+
+    # LATENCY VISIBILITY: logs the real per-component timing LiveKit already
+    # measures internally for every turn - end-of-utterance detection delay,
+    # LLM time-to-first-token, and TTS time-to-first-byte. Without this, any
+    # further latency tuning is guesswork; with it, the logs show exactly
+    # which stage (turn detection vs LLM vs TTS vs network) is actually slow
+    # on a given turn, so effort goes to the real bottleneck instead of
+    # whichever component seems most suspicious. Search backend logs for
+    # "[LATENCY]" to see these live during a call.
+    @session.on("metrics_collected")
+    def on_metrics_collected(ev):
+        m = ev.metrics
+        kind = type(m).__name__
+        if kind == "EOUMetrics":
+            logger.info(
+                f"[LATENCY] end-of-utterance delay: {getattr(m, 'end_of_utterance_delay', '?')}s "
+                f"(time from caller going silent to the agent deciding they're done talking)"
+            )
+        elif kind == "LLMMetrics":
+            logger.info(
+                f"[LATENCY] LLM time-to-first-token: {getattr(m, 'ttft', '?')}s | "
+                f"total generation: {getattr(m, 'duration', '?')}s"
+            )
+        elif kind == "TTSMetrics":
+            logger.info(
+                f"[LATENCY] TTS time-to-first-byte: {getattr(m, 'ttfb', '?')}s | "
+                f"total synthesis: {getattr(m, 'duration', '?')}s"
+            )
+        elif kind == "STTMetrics":
+            logger.info(f"[LATENCY] STT processing duration: {getattr(m, 'duration', '?')}s")
+        else:
+            logger.info(f"[LATENCY] {kind}: {m}")
 
     @session.on("user_input_transcribed")
     def on_user_transcribed(event):
