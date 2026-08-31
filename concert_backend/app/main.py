@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routes import auth_routes, chat_routes, concert_routes, booking_routes, admin_routes, wishlist_routes
+from app.routes import auth_routes, chat_routes, concert_routes, booking_routes, admin_routes, wishlist_routes, voice_routes, telegram_routes
 
 app = FastAPI(title="Concert Booking Assistant API")
 
@@ -9,14 +9,7 @@ app = FastAPI(title="Concert Booking Assistant API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://events-two-phi.vercel.app","http://localhost:5173",
-        "http://127.0.0.1:5173",app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://events-two-phi.vercel.app","http://localhost:5173",
         "http://127.0.0.1:5173","https://events-o0v9jffi9-yuvraj-e83c.vercel.app",],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -28,6 +21,8 @@ app.include_router(concert_routes.router)
 app.include_router(booking_routes.router)
 app.include_router(admin_routes.router)
 app.include_router(wishlist_routes.router)
+app.include_router(voice_routes.router)
+app.include_router(telegram_routes.router)
 
 
 @app.get("/")
