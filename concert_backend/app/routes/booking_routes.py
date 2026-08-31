@@ -290,3 +290,22 @@ def cancel_booking(booking_id: str, current_user: dict = Depends(get_current_use
         )
 
     return {"message": "Booking cancelled", "booking_id": booking_id}
+
+
+@router.get("/{booking_id}/pass")
+def get_booking_pass(booking_id: str):
+    """
+    Public digital pass validation endpoint for scanned QR codes.
+    Returns the verified booking metadata, event schedule, venue coordinates,
+    and seat details.
+    """
+    result = (
+        supabase_admin.table("bookings")
+        .select("booking_id, event_id, category, seats_booked, status, created_at, events(*), users(name, city, email)")
+        .eq("booking_id", booking_id)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Digital ticket pass not found or invalid QR code")
+    
+    return {"ticket": result.data[0]}

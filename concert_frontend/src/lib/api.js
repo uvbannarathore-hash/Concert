@@ -1,6 +1,24 @@
 // In dev, falls back to localhost. In production, set VITE_API_URL in your
 // hosting provider's environment variables to your deployed backend URL.
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
+const envUrl = import.meta.env.VITE_API_URL
+const BASE_URL = (envUrl && envUrl.trim()) ? envUrl.trim().replace(/\/+$/, '') : 'http://127.0.0.1:8000'
+
+export function getPublicPassUrl(bookingId) {
+  if (typeof window === 'undefined') return `/ticket/${bookingId}`
+
+  // 1. In production (deployed on Vercel / custom domain), always use the live production origin
+  if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+    return `${window.location.origin}/ticket/${bookingId}`
+  }
+
+  // 2. In local development: use current Wi-Fi host if accessed via network, or local IP 192.168.1.22
+  const isLoopback = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+  const targetHost = isLoopback ? '192.168.1.22' : window.location.hostname
+  const port = window.location.port ? `:${window.location.port}` : ''
+  const protocol = window.location.protocol || 'http:'
+
+  return `${protocol}//${targetHost}${port}/ticket/${bookingId}`
+}
 
 function getToken() {
   return localStorage.getItem('access_token')
@@ -107,6 +125,8 @@ export const api = {
 
   cancelBooking: (bookingId) =>
     request(`/bookings/${bookingId}/cancel`, { method: 'POST', auth: true }),
+
+  getTicketPass: (bookingId) => request(`/bookings/${bookingId}/pass`),
 
   myProfile: () => request('/auth/me', { auth: true }),
 

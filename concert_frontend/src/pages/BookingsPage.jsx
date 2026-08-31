@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
-import { api } from '../lib/api'
 import { Link } from 'react-router-dom'
+import { QRCodeSVG } from 'qrcode.react'
+import { api, getPublicPassUrl } from '../lib/api'
+import DigitalPassModal from '../components/DigitalPassModal'
 
 const statusStyles = {
   Confirmed: 'text-go border-go/20 bg-go/5',
@@ -13,6 +15,7 @@ export default function BookingsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [cancellingId, setCancellingId] = useState('')
+  const [selectedPass, setSelectedPass] = useState(null)
 
   function load() {
     setLoading(true)
@@ -50,55 +53,67 @@ export default function BookingsPage() {
   }
 
   return (
-    <div className="max-w-4xl mx-auto px-6 py-12 animate-fade-in-up">
-      <div className="mb-10">
-        <p className="eyebrow mb-1">Receipts & passes</p>
-        <h1 className="font-display text-5xl tracking-wide uppercase text-paper">MY BOOKINGS</h1>
-        <p className="text-xs text-haze mt-1">Manage your active entry passes and purchase history</p>
+    <div className="max-w-6xl mx-auto px-6 py-12 animate-fade-in-up">
+      
+      {/* Header section */}
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8 border-b border-white/[0.04] pb-6">
+        <div>
+          <p className="eyebrow mb-1">Your personal box office</p>
+          <h1 className="font-display text-5xl tracking-wide uppercase text-paper">MY BOOKINGS</h1>
+        </div>
+        <Link to="/" className="btn-ghost text-xs uppercase tracking-wider font-mono px-4 py-2 self-start sm:self-auto">
+          Explore More Shows →
+        </Link>
       </div>
 
       {loading && (
-        <div className="space-y-4 animate-pulse">
-          {[1, 2].map((n) => (
-            <div key={n} className="bg-stage2/20 border border-white/[0.04] rounded-2xl h-44 w-full"></div>
-          ))}
+        <div className="flex items-center justify-center py-20">
+          <div className="space-y-3 text-center">
+            <div className="w-8 h-8 border-4 border-spot border-t-transparent rounded-full animate-spin mx-auto"></div>
+            <p className="text-xs font-mono text-haze">Retrieving your passes...</p>
+          </div>
         </div>
       )}
 
       {error && (
         <div className="border border-spot/20 bg-spot/5 text-spot text-xs font-mono rounded-xl p-4 mb-6">
-          ⚠️ Connection failure: {error}
+          {error}
         </div>
       )}
 
-      {!loading && bookings.length === 0 && (
-        <div className="text-center py-20 border border-dashed border-white/[0.06] rounded-2xl bg-stage2/5 max-w-xl mx-auto">
-          <span className="text-4xl">🎟️</span>
-          <p className="font-display text-2xl mb-2 text-paper mt-3 uppercase tracking-wide">No active passes</p>
-          <p className="text-sm text-haze max-w-xs mx-auto">You haven't booked any shows yet. Explore genres and secure your entry today.</p>
-          <Link to="/" className="btn-spot text-xs mt-6 inline-block">Browse Shows</Link>
+      {!loading && !error && bookings.length === 0 && (
+        <div className="glass-card rounded-2xl p-12 text-center max-w-md mx-auto my-12 space-y-4">
+          <span className="text-4xl block">🎟️</span>
+          <h2 className="font-display text-2xl text-paper uppercase">No Active Bookings</h2>
+          <p className="text-xs text-haze leading-relaxed">
+            You haven't reserved tickets for any upcoming live concerts yet. Explore the lineup and reserve your spot!
+          </p>
+          <Link to="/" className="btn-spot inline-block text-xs font-bold uppercase tracking-wider !px-6 !py-2.5 mt-2">
+            Browse Live Shows
+          </Link>
         </div>
       )}
 
+      {/* Bookings Card List - Physical Ticket Look */}
       <div className="space-y-6">
         {bookings.map((b) => {
-          // Joined events detail is returned from backend as b.events
           const eventDetails = b.events || {}
           const isConfirmed = b.status === 'Confirmed'
-          
+          const passUrl = getPublicPassUrl(b.booking_id)
+
           return (
             <div
               key={b.booking_id}
-              className="bg-stage/30 border border-white/[0.04] rounded-2xl shadow-xl overflow-hidden flex flex-col md:flex-row animate-scale-in relative"
+              className="glass-card bg-stage/15 border border-white/[0.04] rounded-2xl overflow-hidden hover:border-white/[0.08] transition-all duration-300 flex flex-col md:flex-row relative group shadow-xl"
             >
               
-              {/* Event poster thumbnail (Left Column) */}
-              <div className="md:w-1/4 h-36 md:h-auto bg-void relative overflow-hidden border-b md:border-b-0 md:border-r border-white/[0.04]">
+              {/* Event Image Banner (Left Column) */}
+              <div className="md:w-64 h-48 md:h-auto relative flex-shrink-0 overflow-hidden bg-void">
                 {eventDetails.image_url ? (
                   <img
                     src={eventDetails.image_url}
                     alt={eventDetails.artist_name || 'Event'}
-                    className="absolute inset-0 w-full h-full object-cover object-center"
+                    className="absolute inset-0 w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-500"
                   />
                 ) : (
                   <div className="absolute inset-0 bg-gradient-to-br from-stage2/40 to-void flex items-center justify-center">
@@ -147,10 +162,30 @@ export default function BookingsPage() {
                     </div>
                   </div>
                 </div>
+
+                {/* Mobile View Pass Button */}
+                <div className="mt-4 pt-3 border-t border-white/[0.04] md:hidden flex justify-between items-center">
+                  <button
+                    onClick={() => setSelectedPass(b)}
+                    className="text-xs font-mono text-spot font-bold uppercase tracking-wider flex items-center gap-1.5"
+                  >
+                    <span>📱 View Digital Pass</span>
+                    <span>↗</span>
+                  </button>
+                  {isConfirmed && (
+                    <button
+                      onClick={() => handleCancel(b.booking_id)}
+                      disabled={cancellingId === b.booking_id}
+                      className="text-xs text-haze hover:text-spot underline disabled:opacity-40"
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
               </div>
 
-              {/* Status and Actions widget (Right Column / Stub Cutout) */}
-              <div className="p-6 border-t md:border-t-0 md:border-l-2 md:border-dashed border-white/[0.04] bg-stage2/10 md:w-52 flex md:flex-col justify-between items-center md:items-stretch relative">
+              {/* Status and QR Code widget (Right Column / Stub Cutout) */}
+              <div className="p-6 border-t md:border-t-0 md:border-l-2 md:border-dashed border-white/[0.04] bg-stage2/10 md:w-56 flex md:flex-col justify-between items-center md:items-stretch relative flex-shrink-0">
                 
                 {/* Physical Ticket Notch Cutouts on left border of this column */}
                 <div className="hidden md:block absolute w-4 h-4 rounded-full bg-void -left-2 top-[-8px] border-b border-white/[0.04]"></div>
@@ -163,32 +198,38 @@ export default function BookingsPage() {
                   </span>
                 </div>
 
-                <div className="text-right md:text-left flex md:flex-col md:gap-3 items-center md:items-stretch justify-end">
+                <div className="hidden md:flex flex-col items-center gap-2 mt-3">
+                  
+                  {/* Scannable SVG QR Code Card */}
+                  <div 
+                    onClick={() => setSelectedPass(b)}
+                    className="w-full bg-white/[0.03] border border-white/[0.06] hover:border-spot/40 p-2.5 rounded-xl flex flex-col items-center gap-1.5 transition-all duration-200 cursor-pointer shadow-inner group/qr"
+                    title="Click to expand Digital Pass"
+                  >
+                    <div className="p-1.5 bg-white rounded-lg shadow-md group-hover/qr:scale-105 transition-transform duration-200">
+                      <QRCodeSVG
+                        value={passUrl}
+                        size={76}
+                        level="M"
+                        fgColor="#0B0A10"
+                        bgColor="#FFFFFF"
+                      />
+                    </div>
+                    <span className="text-[9px] font-mono text-spot group-hover/qr:text-white uppercase tracking-wider font-bold transition flex items-center gap-1">
+                      <span>View Pass</span>
+                      <span>↗</span>
+                    </span>
+                  </div>
+
                   {isConfirmed && (
                     <button
                       onClick={() => handleCancel(b.booking_id)}
                       disabled={cancellingId === b.booking_id}
-                      className="text-xs text-spot hover:text-[#ff5c84] underline underline-offset-4 disabled:opacity-40 font-semibold"
+                      className="text-[11px] text-haze/60 hover:text-spot underline underline-offset-4 disabled:opacity-40 font-mono transition"
                     >
-                      {cancellingId === b.booking_id ? 'Cancelling Pass…' : 'Cancel Ticket'}
+                      {cancellingId === b.booking_id ? 'Cancelling…' : 'Cancel Ticket'}
                     </button>
                   )}
-                  
-                  {/* barcode on desktop view */}
-                  <div className="hidden md:block w-full bg-white/5 border border-white/[0.02] p-2 rounded-lg flex flex-col items-center mt-3">
-                    <div className="h-6 w-full flex justify-between overflow-hidden opacity-40 mix-blend-screen px-2">
-                      {Array.from({ length: 22 }).map((_, i) => (
-                        <div 
-                          key={i} 
-                          className="bg-paper" 
-                          style={{ 
-                            width: `${(i % 3 === 0 ? 2 : i % 2 === 0 ? 0.5 : 1)}px`, 
-                            opacity: i % 5 === 0 ? 0.3 : 1 
-                          }} 
-                        />
-                      ))}
-                    </div>
-                  </div>
                 </div>
 
               </div>
@@ -197,6 +238,14 @@ export default function BookingsPage() {
           )
         })}
       </div>
+
+      {/* Interactive Digital Ticket Pass Modal */}
+      <DigitalPassModal
+        isOpen={!!selectedPass}
+        onClose={() => setSelectedPass(null)}
+        booking={selectedPass}
+      />
+
     </div>
   )
 }

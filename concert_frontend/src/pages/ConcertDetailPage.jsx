@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
-import { api } from '../lib/api'
+import { useParams, useNavigate, Link } from 'react-router-dom'
+import { QRCodeSVG } from 'qrcode.react'
+import { api, getPublicPassUrl } from '../lib/api'
+import DigitalPassModal from '../components/DigitalPassModal'
 
 function loadRazorpayScript() {
   return new Promise((resolve) => {
@@ -44,6 +46,7 @@ export default function ConcertDetailPage() {
   const [error, setError] = useState('')
   const [status, setStatus] = useState('') // '', 'paying', 'done'
   const [confirmedId, setConfirmedId] = useState('')
+  const [showPassModal, setShowPassModal] = useState(false)
   const [paymentId, setPaymentId] = useState('')
 
   useEffect(() => {
@@ -213,29 +216,53 @@ export default function ConcertDetailPage() {
               <div className="flex justify-between"><span>PAYMENT STATUS</span><span className="text-go font-semibold">SUCCESS</span></div>
             </div>
 
-            {/* Mock Ticket Barcode */}
-            <div className="w-full bg-white/5 border border-white/[0.02] p-4 rounded-xl flex flex-col items-center gap-1.5 shadow-inner">
-              <div className="h-10 w-full flex justify-between overflow-hidden opacity-80 mix-blend-screen px-4">
-                {Array.from({ length: 42 }).map((_, i) => (
-                  <div 
-                    key={i} 
-                    className="bg-paper" 
-                    style={{ 
-                      width: `${(i % 3 === 0 ? 3 : i % 2 === 0 ? 1 : 2)}px`, 
-                      opacity: i % 7 === 0 ? 0.3 : 1 
-                    }} 
-                  />
-                ))}
+            {/* Scannable Gate Pass QR Code Box */}
+            <div className="w-full bg-white/[0.03] border border-white/[0.06] p-5 rounded-2xl flex flex-col items-center gap-3 shadow-inner">
+              <div className="p-3 bg-white rounded-xl shadow-md">
+                <QRCodeSVG
+                  value={getPublicPassUrl(confirmedId)}
+                  size={140}
+                  level="H"
+                  fgColor="#0B0A10"
+                  bgColor="#FFFFFF"
+                />
               </div>
-              <span className="text-[10px] font-mono tracking-[0.3em] text-haze/50 mt-1">{confirmedId}</span>
+              <div className="text-center space-y-1">
+                <span className="text-xs font-mono font-bold tracking-widest text-paper uppercase block">{confirmedId}</span>
+                <span className="text-[10px] text-haze font-mono block">Scan with camera for turnstile entry verification</span>
+              </div>
+              <button
+                onClick={() => setShowPassModal(true)}
+                className="text-xs font-mono text-spot hover:text-white uppercase tracking-wider font-bold transition flex items-center gap-1.5 mt-1"
+              >
+                <span>Open Digital Pass Modal</span>
+                <span>↗</span>
+              </button>
             </div>
           </div>
         </div>
 
         <div className="flex flex-col sm:flex-row gap-3 mt-8">
-          <button onClick={() => navigate('/bookings')} className="btn-spot flex-1 text-sm">View My Bookings</button>
-          <button onClick={() => navigate('/')} className="btn-ghost flex-1 text-sm">Browse More Shows</button>
+          <Link to={`/ticket/${confirmedId}`} className="btn-spot flex-1 text-sm text-center">
+            View Official Pass Page →
+          </Link>
+          <button onClick={() => navigate('/bookings')} className="btn-ghost flex-1 text-sm">
+            My Bookings List
+          </button>
         </div>
+
+        {/* Digital Pass Modal */}
+        <DigitalPassModal
+          isOpen={showPassModal}
+          onClose={() => setShowPassModal(false)}
+          booking={{
+            booking_id: confirmedId,
+            category: selected?.category || 'General',
+            seats_booked: seats,
+            status: 'Confirmed',
+            event: event,
+          }}
+        />
       </div>
     )
   }
