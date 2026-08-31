@@ -40,7 +40,7 @@ uvicorn==0.30.6
 watchfiles==1.2.0
 websockets==15.0.1
 razorpay==1.4.2
-
+google-auth==2.57.0
 # SpeechRecognition/gTTS/pydub below are leftovers from the old orphaned
 # app/voice_agent.py flat file (dead code, not used by voice_routes.py or
 # the current app/voice_agent/ package) - harmless to keep, safe to remove
