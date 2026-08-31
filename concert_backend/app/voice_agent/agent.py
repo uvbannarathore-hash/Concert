@@ -730,6 +730,20 @@ if __name__ == "__main__":
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
-             num_idle_processes=0,
+            num_idle_processes=0,
+            load_threshold=0.95,        # was implicit 0.7 — was rejecting
+                                          # jobs at 0.72 load, which is barely
+                                          # above idle. Raising this stops
+                                          # false "full capacity" rejections,
+                                          # though it won't stop an actual OOM.
+            job_memory_warn_mb=400,      # logs a warning before it gets fatal,
+                                          # instead of a silent OOM-kill —
+                                          # gives you real numbers to see how
+                                          # close to the ceiling each job runs.
+            job_memory_limit_mb=450,     # kills just THAT job cleanly (with a
+                                          # log) instead of letting the whole
+                                          # container OOM and restart — so at
+                                          # least other calls aren't affected
+                                          # and you get a diagnosable error.
         )
     )
