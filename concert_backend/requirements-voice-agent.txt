@@ -1,24 +1,134 @@
-# --- Voice agent (Clinigo port) additions ---
-# Merge these into concert_backend/requirements.txt.
-# NOT included: psycopg2-binary, edge-tts, miniaudio, livekit-plugins-google,
-# google-generativeai — Clinigo used these but this port doesn't need them
-# (Supabase client replaces raw psycopg2; Gemini fallback in agent.py is
-# optional/unused by tata_voice_server.py; edge-tts/miniaudio appear unused
-# in the files actually ported).
+# Requirements for the separate voice worker service that runs
+# app/voice_agent/agent.py (website STS, LiveKit Cloud) and
+# app/voice_agent/tata_voice_server.py (phone calls, Tata Smartflo).
+#
+# This is a DIFFERENT Render service from the main FastAPI backend
+# (concert_backend/requirements.txt) - deploy it as a Background Worker
+# (agent.py needs no public port) or a Web Service (tata_voice_server.py
+# needs a public wss:// endpoint for Tata Smartflo to connect to).
+#
+# Versions below are copied from Yuvraj's local environment, where this
+# exact combination is already verified working against livekit-agents 1.7.
 
-livekit>=0.18.0
-livekit-agents>=0.8.0
-livekit-plugins-openai>=0.8.0
-livekit-plugins-cartesia
-livekit-api
-audioop-lts
-aiohttp
+aiofiles==25.1.0
+aiohappyeyeballs==2.7.1
+aiohttp==3.14.3
+aiosignal==1.4.0
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.14.2
+attrs==26.1.0
+audioop-lts==0.2.2
+av==18.1.0
+certifi==2026.7.22
+cffi==2.1.1
+charset-normalizer==3.5.1
+click==8.1.8
+colorama==0.4.6
+cryptography==50.0.1
+deprecation==2.1.0
+distro==1.9.0
+dnspython==2.8.0
+docstring_parser==0.18.0
+dotenv==0.9.9
+email-validator==2.3.0
+eval_type_backport==0.4.0
+fastapi==0.115.0
+flatbuffers==25.12.19
+frozenlist==1.8.0
+google-auth==2.57.0
+google-genai==1.23.0
+googleapis-common-protos==1.75.2
+gotrue==2.12.4
+groq==1.7.0
+grpcio==1.83.0
+gTTS==2.5.1
+h11==0.16.0
+h2==4.4.1
+hpack==4.2.0
+httpcore==1.0.9
+httptools==0.8.0
+httpx==0.27.2
+hyperframe==6.1.0
+idna==3.19
+jiter==0.16.0
+json_repair==0.60.1
+livekit==1.1.14
+livekit-agents==1.7.0
+livekit-api==1.2.0
+livekit-blingfire==1.1.0
+livekit-local-inference==0.2.7
+livekit-plugins-cartesia==1.7.0
+livekit-plugins-openai==1.7.0
+livekit-plugins-silero==1.7.0
+livekit-protocol==1.1.24
+markdown-it-py==4.2.0
+mdurl==0.1.2
+multidict==6.7.1
+nest-asyncio==1.6.0
+numpy==2.5.2
+onnxruntime==1.29.0
+openai==2.54.0
+opentelemetry-api==1.44.0
+opentelemetry-exporter-otlp==1.44.0
+opentelemetry-exporter-otlp-proto-common==1.44.0
+opentelemetry-exporter-otlp-proto-grpc==1.44.0
+opentelemetry-exporter-otlp-proto-http==1.44.0
+opentelemetry-proto==1.44.0
+opentelemetry-sdk==1.44.0
+opentelemetry-semantic-conventions==0.65b0
+packaging==26.3
+pillow==12.3.0
+postgrest==0.16.11
+prometheus_client==0.26.0
+propcache==0.5.2
+protobuf==7.36.0
+psutil==7.2.2
+pyasn1==0.6.4
+pyasn1_modules==0.4.2
+pycparser==3.0
+pydantic==2.12.2
+pydantic_core==2.41.4
+pydub==0.25.1
+Pygments==2.21.0
+PyJWT==2.13.0
+python-dateutil==2.9.0.post0
+python-dotenv==1.0.1
+python-multipart==0.0.32
+PyYAML==6.0.3
+razorpay==1.4.2
+realtime==2.5.3
+requests==2.34.2
+rich==15.0.0
+setuptools==70.3.0
+shellingham==1.5.4
+six==1.17.0
+sniffio==1.3.1
+SpeechRecognition==3.10.4
+standard-aifc==3.13.0
+standard-chunk==3.13.0
+starlette==0.38.6
+storage3==0.7.7
+StrEnum==0.4.15
+supabase==2.7.4
+supafunc==0.5.1
+tenacity==9.1.4
+tqdm==4.70.0
+typer==0.27.1
+types-protobuf==7.35.1.20260826
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+urllib3==2.7.0
+uvicorn==0.30.6
+watchfiles==1.2.0
+websockets==15.0.1
+yarl==1.24.5
 
-# ACTION NEEDED: Clinigo's own requirements.txt lists "livekit-plugins-nvidia"
-# but tata_voice_server.py and agent.py both import `silero` (Silero VAD) from
-# `livekit.plugins` — that's normally shipped as a SEPARATE package,
-# livekit-plugins-silero, which is missing from Clinigo's requirements.txt
-# entirely. This may be a pre-existing gap in Clinigo (silero possibly
-# installed manually / bundled with nvidia plugin on that machine) —
-# verify by trying `pip install livekit-plugins-silero` and adding it here
-# if the import fails without it.
+# NOTE: PyAudio and sounddevice were removed from this list - they need
+# PortAudio's system library (libportaudio2), which Render's default Python
+# environment does NOT have preinstalled, so leaving them in would fail the
+# build. Both were local-mic-testing leftovers anyway - tata_voice_server.py
+# talks over Tata's WebSocket, not a local audio device, so nothing in the
+# deployed worker actually needs them. If you ever DO need a local audio
+# device on the worker (unlikely), add an apt step (`apt-get install -y
+# libportaudio2`) via a Dockerfile and add these two lines back.

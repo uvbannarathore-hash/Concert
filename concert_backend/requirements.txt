@@ -18,6 +18,7 @@ httptools==0.8.0
 httpx==0.27.2
 hyperframe==6.1.0
 idna==3.19
+livekit-api==1.2.0
 packaging==26.3
 postgrest==0.16.11
 pydantic==2.12.2
@@ -39,6 +40,11 @@ uvicorn==0.30.6
 watchfiles==1.2.0
 websockets==15.0.1
 razorpay==1.4.2
+
+# SpeechRecognition/gTTS/pydub below are leftovers from the old orphaned
+# app/voice_agent.py flat file (dead code, not used by voice_routes.py or
+# the current app/voice_agent/ package) - harmless to keep, safe to remove
+# once that legacy file is deleted.
 SpeechRecognition==3.10.4
 gTTS==2.5.1
 pydub==0.25.1
@@ -47,9 +53,17 @@ pydub==0.25.1
 #   pip install --no-deps google-genai==1.23.0
 # NOT here in requirements.txt - including it in this list forces pip to
 # resolve its httpx>=0.28.1 requirement against the httpx==0.27.2 pinned
-# above (needed by the already-installed supabase stack), causing the
+# above (needed by the already-installed supabase stack), causing a
 # ResolutionImpossible conflict. --no-deps installs google-genai's own code
-# without re-checking/touching httpx or websockets at all - safe here since
-# our code only calls the plain REST generate_content() API, never the
+# without touching httpx or websockets at all - safe here since app/agents/
+# only calls the plain REST generate_content() API, never the
 # websocket-based Live/streaming API, so the version mismatch never
 # actually matters at runtime.
+#
+# Render Build Command should be:
+#   pip install -r requirements.txt && pip install --no-deps google-genai==1.23.0
+#
+# livekit-api (above) is enough for voice_routes.py's token minting
+# (`from livekit import api`) - it does NOT need the full livekit-agents /
+# livekit-plugins-* stack, those belong only to the separate voice worker
+# service (see requirements-voice-agent.txt).
