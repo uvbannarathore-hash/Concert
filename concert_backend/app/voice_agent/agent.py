@@ -7,7 +7,7 @@ with Agent + AgentSession + function_tool.
 Preserved from the original implementation:
 - Cartesia Ink-Whisper STT
 - Dynamic English/Hindi Cartesia TTS
-- Groq (openai/gpt-oss-20b) -> Gemini -> Gemini secondary LLM fallback
+- Groq (gpt-oss-20b -> gpt-oss-120b) -> Gemini -> Gemini secondary LLM fallback
 - SIP and authenticated website sessions
 - Existing voice_db booking functions
 - Session transcript + summary persistence
@@ -97,23 +97,31 @@ def _build_llm_fallback() -> llm.LLM:
 
     MODEL CHOICE: llama-3.3-70b-versatile and llama-3.1-8b-instant were
     tried here briefly to get more free-tier TPM headroom than
-    openai/gpt-oss-20b's 8,000 TPM ceiling, but BOTH Llama models were
-    shut down by Groq on 2026-08-16 (confirmed via a 404 model_not_found
-    error when actually deployed) - third-party pricing/rate-limit
-    write-ups found via search still listed them as available, but were
-    describing pre-shutdown state despite looking recently dated. Reverted
-    to openai/gpt-oss-20b, the same model that was working (just hitting
-    its TPM ceiling under real conversational load) before this file was
-    ever touched - a known-good choice beats guessing another model name
-    from secondary sources a second time.
+    openai/gpt-oss-20b's 8,000 TPM ceiling, but BOTH Llama models are now
+    Enterprise-only on Groq (confirmed via a 404 model_not_found error when
+    actually deployed, then confirmed again via Groq's official model list
+    showing them as "Contact Sales" / no free-tier access at all).
 
-    To find a genuinely better-TPM model on the CURRENT Groq catalog
-    (rather than guessing further), run this against your own account,
-    which reflects your actual live access, not a blog post:
-        curl -X GET "https://api.groq.com/openai/v1/models" \
-          -H "Authorization: Bearer $GROQ_API_KEY"
-    or check https://console.groq.com/docs/models directly, then update
-    the model= string below.
+    groq/compound-mini was tried next (70,000 TPM free-tier, per this
+    account's own Organization Limits page) but was reverted in favor of
+    using BOTH openai/gpt-oss-20b AND openai/gpt-oss-120b as two separate
+    Groq fallback entries instead. Reasoning: compound/compound-mini are
+    "agentic systems" that may use their OWN built-in tools (web search,
+    code execution) alongside/instead of the custom tools this agent hands
+    them, which is unpredictable behavior to debug in a voice UX. The two
+    gpt-oss models are plain, predictable chat-completion models, and -
+    per this account's own Limits page - each model's TPM quota is tracked
+    SEPARATELY (8,000 TPM each), so stacking both here effectively gives
+    16,000 TPM of combined Groq headroom before ever falling through to
+    Gemini, without touching compound's uncertain tool-use behavior.
+    gpt-oss-20b goes first since it's faster (~1000 tokens/sec vs 120b's
+    ~500 tokens/sec) - 120b only gets used on the turns where 20b's own
+    8,000 TPM bucket is already exhausted for that minute.
+
+    To verify current numbers yourself instead of trusting old comments
+    here, check console.groq.com/settings/limits directly (toggle "Show
+    Current Project Limits" for your actual configured limits, which can
+    differ from the org defaults shown by default).
 
     Ollama was previously a 4th fallback here but has been removed - it was
     never actually reachable in this deployment (every attempt logged a
@@ -125,10 +133,17 @@ def _build_llm_fallback() -> llm.LLM:
     providers: list[llm.LLM] = []
 
     if config.GROQ_API_KEY:
-        logger.info("Fallback Chain: loading Groq provider FIRST (openai/gpt-oss-20b)")
+        logger.info("Fallback Chain: loading Groq providers FIRST (openai/gpt-oss-20b, then openai/gpt-oss-120b)")
         providers.append(
             openai.LLM(
                 model="openai/gpt-oss-20b",
+                base_url="https://api.groq.com/openai/v1",
+                api_key=config.GROQ_API_KEY,
+            )
+        )
+        providers.append(
+            openai.LLM(
+                model="openai/gpt-oss-120b",
                 base_url="https://api.groq.com/openai/v1",
                 api_key=config.GROQ_API_KEY,
             )
