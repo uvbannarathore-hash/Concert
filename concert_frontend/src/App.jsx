@@ -8,6 +8,7 @@ import ChatPage from './pages/ChatPage'
 import AdminPage from './pages/AdminPage'
 import WishlistPage from './pages/WishlistPage'
 import ProfilePage from './pages/ProfilePage'
+import TicketPassPage from './pages/TicketPassPage'
 import ChatWidget from './components/ChatWidget'
 import VoiceWidget from './components/VoiceWidget'
 import { api } from './lib/api'
@@ -24,6 +25,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/concerts/:eventId" element={<ConcertDetailPage />} />
+          <Route path="/ticket/:bookingId" element={<TicketPassPage />} />
           <Route path="/login" element={<AuthPage />} />
           <Route
             path="/bookings"

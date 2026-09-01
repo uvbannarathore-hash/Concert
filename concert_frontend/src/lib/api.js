@@ -1,6 +1,7 @@
 // In dev, falls back to localhost. In production, set VITE_API_URL in your
 // hosting provider's environment variables to your deployed backend URL.
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
+const envUrl = import.meta.env.VITE_API_URL
+const BASE_URL = (envUrl && envUrl.trim()) ? envUrl.trim().replace(/\/+$/, '') : 'http://127.0.0.1:8000'
 
 function getToken() {
   return localStorage.getItem('access_token')
@@ -127,4 +128,7 @@ export const api = {
   // Issues a short-lived LiveKit token for the website speech-to-speech
   // voice booking assistant (see VoiceWidget.jsx).
   getVoiceToken: () => request('/voice/token', { method: 'POST', auth: true }),
+}
+export function getPublicPassUrl(bookingId) {
+  return `${window.location.origin}/ticket/${bookingId}`
 }
