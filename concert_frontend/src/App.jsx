@@ -14,6 +14,7 @@ import ChatWidget from './components/ChatWidget'
 import VoiceWidget from './components/VoiceWidget'
 import { api } from './lib/api'
 
+
 function RequireAuth({ children }) {
   return api.isLoggedIn() ? children : <Navigate to="/login" replace />
 }
