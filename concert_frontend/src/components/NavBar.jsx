@@ -103,6 +103,9 @@ export default function NavBar() {
             <>
               <Link to="/wishlist" className={`${activeClass('/wishlist')} transition-all duration-200`}>Wishlist</Link>
               <Link to="/bookings" className={`${activeClass('/bookings')} transition-all duration-200`}>My Bookings</Link>
+              {!profile?.is_admin && (
+                <Link to="/list-your-show" className={`${activeClass('/list-your-show')} transition-all duration-200`}>Host Your Show</Link>
+              )}
             </>
           )}
           {profile?.is_admin && (
@@ -203,6 +206,9 @@ export default function NavBar() {
             <>
               <Link to="/wishlist" className="text-base font-medium text-paper py-1 border-b border-white/[0.02]">Wishlist</Link>
               <Link to="/bookings" className="text-base font-medium text-paper py-1 border-b border-white/[0.02]">My Bookings</Link>
+              {!profile?.is_admin && (
+                <Link to="/list-your-show" className="text-base font-medium text-paper py-1 border-b border-white/[0.02]">List Your Show</Link>
+              )}
               <Link to="/profile" className="text-base font-medium text-paper py-1 border-b border-white/[0.02]">👤 Profile ({firstName})</Link>
               {profile?.is_admin && (
                 <Link to="/admin" className="text-base font-medium text-spot2 py-1 border-b border-white/[0.02]">⚙️ Admin Backend</Link>

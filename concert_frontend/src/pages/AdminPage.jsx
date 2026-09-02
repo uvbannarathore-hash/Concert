@@ -17,6 +17,10 @@ export default function AdminPage() {
   const [eventForm, setEventForm] = useState(emptyEvent)
   const [ticketForm, setTicketForm] = useState(emptyTicket)
   const [bookings, setBookings] = useState([])
+  const [submissions, setSubmissions] = useState([])
+  const [submissionsLoading, setSubmissionsLoading] = useState(false)
+  const [submissionFilter, setSubmissionFilter] = useState('Pending')
+  const [processingSubmissionId, setProcessingSubmissionId] = useState(null)
 
   const [showPastEvents, setShowPastEvents] = useState(false)
   const [pastEvents, setPastEvents] = useState([])
@@ -170,6 +174,50 @@ export default function AdminPage() {
     if (tab === 'bookings') loadBookings()
   }, [tab])
 
+  function loadSubmissions() {
+    setSubmissionsLoading(true)
+    adminApi
+      .getShowSubmissions(submissionFilter)
+      .then((data) => setSubmissions(data.submissions || []))
+      .catch((err) => {
+        if (err.message.includes('403')) setForbidden(true)
+        setError(err.message)
+      })
+      .finally(() => setSubmissionsLoading(false))
+  }
+
+  useEffect(() => {
+    if (tab === 'submissions') loadSubmissions()
+  }, [tab, submissionFilter])
+
+  async function handleApproveSubmission(id) {
+    setProcessingSubmissionId(id)
+    try {
+      await adminApi.approveShowSubmission(id)
+      setMsg('Show approved and published.')
+      loadSubmissions()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setProcessingSubmissionId(null)
+    }
+  }
+
+  async function handleRejectSubmission(id) {
+    const reason = window.prompt('Reason for rejecting this submission (shown to the organizer):')
+    if (reason === null) return
+    setProcessingSubmissionId(id)
+    try {
+      await adminApi.rejectShowSubmission(id, reason)
+      setMsg('Submission rejected.')
+      loadSubmissions()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setProcessingSubmissionId(null)
+    }
+  }
+
   useEffect(() => {
     if (tab === 'events' && showPastEvents) loadPastEvents()
   }, [tab, showPastEvents])
@@ -205,6 +253,7 @@ export default function AdminPage() {
             { id: 'events', label: '📅 Event Setup', icon: '📝' },
             { id: 'pricing', label: '🎟️ Ticket Rates', icon: '🏷️' },
             { id: 'bookings', label: '📋 Bookings List', icon: '🧾' },
+            { id: 'submissions', label: '📬 Show Submissions', icon: '✅' },
           ].map((item) => (
             <button
               key={item.id}
@@ -480,6 +529,101 @@ export default function AdminPage() {
                           {b.status}
                         </span>
                       </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* 5. Show Submissions Review Panel */}
+          {tab === 'submissions' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <h2 className="font-display text-xl text-paper uppercase tracking-wider">Show Submissions</h2>
+                <div className="flex gap-2">
+                  {['Pending', 'Approved', 'Rejected', 'all'].map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setSubmissionFilter(s)}
+                      className={`text-[10px] font-mono uppercase px-3 py-1.5 rounded-lg border transition ${
+                        submissionFilter === s
+                          ? 'bg-spot text-void border-spot font-bold'
+                          : 'border-white/[0.06] text-haze hover:text-paper'
+                      }`}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {submissionsLoading && <p className="text-xs font-mono text-haze">Loading…</p>}
+              {!submissionsLoading && submissions.length === 0 && (
+                <p className="text-xs font-mono text-haze">No {submissionFilter !== 'all' ? submissionFilter.toLowerCase() : ''} submissions.</p>
+              )}
+
+              <div className="space-y-3">
+                {submissions.map((s) => {
+                  const submitter = s.users || {}
+                  return (
+                    <div key={s.id} className="border border-white/[0.04] bg-white/[0.01] rounded-xl p-4 space-y-3">
+                      <div className="flex justify-between items-start flex-wrap gap-3">
+                        <div>
+                          <p className="font-mono text-sm text-paper font-semibold">{s.artist_name} · {s.event_type}</p>
+                          <p className="text-xs text-haze mt-1">
+                            📍 {s.venue_name}, {s.city} · 📅 {s.event_date} at {s.event_time}
+                          </p>
+                          <p className="text-[11px] text-haze/60 mt-1">
+                            Submitted by: {submitter.name || submitter.email || s.submitted_by_user_id}
+                            {s.organizer_contact_phone && ` · ${s.organizer_contact_phone}`}
+                          </p>
+                          {s.organizer_notes && (
+                            <p className="text-[11px] text-haze/60 mt-1 italic">"{s.organizer_notes}"</p>
+                          )}
+                        </div>
+                        <span className={`text-[10px] font-mono uppercase px-2.5 py-0.5 rounded-full border ${
+                          s.status === 'Approved' ? 'border-go/20 bg-go/5 text-go' :
+                          s.status === 'Rejected' ? 'border-spot/20 bg-spot/5 text-spot' :
+                          'border-spot2/20 bg-spot2/5 text-spot2'
+                        }`}>
+                          {s.status}
+                        </span>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        {(s.categories || []).map((c, i) => (
+                          <span key={i} className="text-[10px] font-mono px-2 py-1 rounded border border-white/[0.06] text-haze">
+                            {c.category}: ₹{c.price} ({c.seats} seats)
+                          </span>
+                        ))}
+                      </div>
+
+                      {s.status === 'Rejected' && s.rejection_reason && (
+                        <p className="text-[11px] text-spot">Rejection reason: {s.rejection_reason}</p>
+                      )}
+                      {s.status === 'Approved' && s.created_event_id && (
+                        <p className="text-[11px] text-go">Published as event_id: {s.created_event_id}</p>
+                      )}
+
+                      {s.status === 'Pending' && (
+                        <div className="flex gap-3 pt-2 border-t border-white/[0.04]">
+                          <button
+                            onClick={() => handleApproveSubmission(s.id)}
+                            disabled={processingSubmissionId === s.id}
+                            className="text-xs font-mono uppercase px-3 py-1.5 rounded-lg border border-go/30 text-go hover:bg-go/10 disabled:opacity-40"
+                          >
+                            {processingSubmissionId === s.id ? 'Working…' : '✓ Approve & Publish'}
+                          </button>
+                          <button
+                            onClick={() => handleRejectSubmission(s.id)}
+                            disabled={processingSubmissionId === s.id}
+                            className="text-xs font-mono uppercase px-3 py-1.5 rounded-lg border border-spot/30 text-spot hover:bg-spot/10 disabled:opacity-40"
+                          >
+                            ✕ Reject
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )
                 })}

@@ -9,6 +9,7 @@ import AdminPage from './pages/AdminPage'
 import WishlistPage from './pages/WishlistPage'
 import ProfilePage from './pages/ProfilePage'
 import TicketPassPage from './pages/TicketPassPage'
+import ListYourShowPage from './pages/ListYourShowPage'
 import ChatWidget from './components/ChatWidget'
 import VoiceWidget from './components/VoiceWidget'
 import { api } from './lib/api'
@@ -64,6 +65,14 @@ export default function App() {
             element={
               <RequireAuth>
                 <ProfilePage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/list-your-show"
+            element={
+              <RequireAuth>
+                <ListYourShowPage />
               </RequireAuth>
             }
           />

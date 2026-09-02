@@ -74,4 +74,17 @@ export const adminApi = {
     }
     return data
   },
+
+  // "List Your Show" review queue
+  getShowSubmissions: (status = 'Pending') =>
+    adminRequest(`/admin/show-submissions?status=${encodeURIComponent(status)}`),
+
+  approveShowSubmission: (submissionId) =>
+    adminRequest(`/admin/show-submissions/${submissionId}/approve`, { method: 'POST' }),
+
+  rejectShowSubmission: (submissionId, reason) =>
+    adminRequest(`/admin/show-submissions/${submissionId}/reject`, {
+      method: 'POST',
+      body: { reason },
+    }),
 }

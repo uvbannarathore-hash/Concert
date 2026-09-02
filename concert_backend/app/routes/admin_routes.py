@@ -191,3 +191,105 @@ def update_pricing(event_id: str, category: str, payload: UpdatePricingRequest, 
 def list_all_bookings(admin=Depends(get_current_admin)):
     result = supabase_admin.table("bookings").select("*, events(*)").order("created_at", desc=True).execute()
     return {"bookings": result.data}
+
+
+# ---------- "List Your Show" review queue ----------
+# Organizer-facing submit/track endpoints live in show_routes.py. These are
+# the admin-side review actions: list pending submissions, approve (which
+# converts a submission into a real event via the SAME
+# create_event_with_pricing RPC the admin AI assistant uses), or reject
+# with a reason the organizer can see on their end.
+
+@router.get("/show-submissions")
+def list_show_submissions(status: str = "Pending", admin=Depends(get_current_admin)):
+    """status: Pending (default), Approved, Rejected, or 'all' for every submission."""
+    query = supabase_admin.table("show_submissions").select("*, users(name, email, phone)").order("created_at", desc=True)
+    if status != "all":
+        query = query.eq("status", status)
+    result = query.execute()
+    return {"submissions": result.data}
+
+
+@router.post("/show-submissions/{submission_id}/approve")
+def approve_show_submission(submission_id: int, admin=Depends(get_current_admin)):
+    """
+    Converts a pending submission into a real, live event. Uses the exact
+    same create_event_with_pricing RPC as the admin AI assistant's
+    create_event1 tool, so a "List Your Show" approval and an admin
+    creating an event via chat produce identically-shaped events - there
+    is no second, parallel event-creation code path to keep in sync.
+    """
+    submission = (
+        supabase_admin.table("show_submissions")
+        .select("*")
+        .eq("id", submission_id)
+        .execute()
+    )
+    if not submission.data:
+        raise HTTPException(status_code=404, detail="Submission not found")
+
+    row = submission.data[0]
+    if row["status"] != "Pending":
+        raise HTTPException(status_code=400, detail=f"Submission is already {row['status']}, not Pending")
+
+    event_id = f"EVT{int(time.time())}"
+    artist_id = f"ART{int(time.time())}"
+    venue_id = f"VEN{int(time.time())}"
+
+    rpc_result = supabase_admin.rpc(
+        "create_event_with_pricing",
+        {
+            "p_event_id": event_id,
+            "p_artist_id": artist_id,
+            "p_artist_name": row["artist_name"],
+            "p_venue_id": venue_id,
+            "p_venue_name": row["venue_name"],
+            "p_city": row["city"],
+            "p_event_date": row["event_date"],
+            "p_event_time": row["event_time"],
+            "p_event_type": row["event_type"],
+            "p_categories": row["categories"],
+            "p_image_url": row.get("image_url"),
+            "p_latitude": row.get("latitude"),
+            "p_longitude": row.get("longitude"),
+        },
+    ).execute()
+
+    if not rpc_result.data or not rpc_result.data.get("event_id"):
+        raise HTTPException(status_code=500, detail="Failed to create event from submission")
+
+    supabase_admin.table("show_submissions").update(
+        {
+            "status": "Approved",
+            "reviewed_by": admin["user_id"],
+            "reviewed_at": "now()",
+            "created_event_id": event_id,
+        }
+    ).eq("id", submission_id).execute()
+
+    return {"message": "Submission approved and published", "event_id": event_id}
+
+
+class RejectSubmissionRequest(BaseModel):
+    reason: str
+
+
+@router.post("/show-submissions/{submission_id}/reject")
+def reject_show_submission(submission_id: int, payload: RejectSubmissionRequest, admin=Depends(get_current_admin)):
+    result = (
+        supabase_admin.table("show_submissions")
+        .update(
+            {
+                "status": "Rejected",
+                "rejection_reason": payload.reason,
+                "reviewed_by": admin["user_id"],
+                "reviewed_at": "now()",
+            }
+        )
+        .eq("id", submission_id)
+        .eq("status", "Pending")
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Pending submission not found")
+    return {"message": "Submission rejected"}

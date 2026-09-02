@@ -128,7 +128,38 @@ export const api = {
   // Issues a short-lived LiveKit token for the website speech-to-speech
   // voice booking assistant (see VoiceWidget.jsx).
   getVoiceToken: () => request('/voice/token', { method: 'POST', auth: true }),
+
+  // "List Your Show" - submits an event for admin review. Uses raw fetch
+  // (not the request() helper) since this is multipart/form-data - the
+  // submission fields go as a JSON string under the 'payload' field
+  // alongside an optional poster image file, matching how the admin
+  // assistant's image-upload endpoint is structured.
+  submitShow: async (submissionData, imageFile) => {
+    const token = getToken()
+    if (!token) throw new Error('Not logged in')
+
+    const formData = new FormData()
+    formData.append('payload', JSON.stringify(submissionData))
+    if (imageFile) formData.append('image', imageFile)
+
+    const res = await fetch(`${BASE_URL}/shows/submit`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData,
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      const message = data.detail
+        ? (typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail))
+        : `Request failed (${res.status})`
+      throw new Error(message)
+    }
+    return data
+  },
+
+  myShowSubmissions: () => request('/shows/my-submissions', { auth: true }),
 }
+
 export function getPublicPassUrl(bookingId) {
   return `${window.location.origin}/ticket/${bookingId}`
 }
