@@ -42,7 +42,7 @@ logger = logging.getLogger("voice_tools")
 
 
 class ConcertBookingTools:
-    """Tools exposed to the LLM agent for booking concert tickets over a phone call."""
+    """Tools exposed to the LLM agent for booking tickets for all supported event types over a phone call."""
 
     @function_tool
     async def search_events(self, query: str = "", city: str = "") -> str:
@@ -78,16 +78,17 @@ class ConcertBookingTools:
         caller_phone: str,
         caller_name: str = "",
     ) -> str:
-        """Book concert tickets for the caller. Must collect event_id, category, number
-        of seats, and confirm the caller's phone number and name before calling this.
+        """Book tickets for the caller for any supported event type.
+Must collect event_id, category, number of seats, and confirm the
+caller before calling this.
 
-        Args:
-            event_id: The event_id to book.
-            category: Ticket category, e.g. 'VIP', 'Gold', 'Silver' — must match get_ticket_categories exactly.
-            seats: Number of seats to book.
-            caller_phone: The caller's phone number (from caller ID or confirmed verbally).
-            caller_name: The caller's name.
-        """
+Args:
+    event_id: The event_id to book.
+    category: Ticket category, e.g. 'VIP', 'Gold', 'Silver' — must match get_ticket_categories exactly.
+    seats: Number of seats to book.
+    caller_phone: The caller's phone number (from caller ID or confirmed verbally).
+    caller_name: The caller's name.
+"""
         logger.info(f"Executing Tool book_ticket event_id={event_id}, category={category}, seats={seats}, phone={caller_phone}")
         res = await asyncio.to_thread(
             voice_db.book_ticket, caller_phone, event_id, category, seats, caller_name or None
@@ -158,14 +159,15 @@ class ConcertBookingToolsWeb:
 
     @function_tool
     async def book_ticket(self, event_id: str, category: str, seats: int) -> str:
-        """Book concert tickets for the logged-in user. Must collect event_id, category,
-        and number of seats, then confirm out loud before calling this.
+        """Book tickets for the logged-in user for any supported event type.
+Must collect event_id, category, and number of seats, then confirm
+out loud before calling this.
 
-        Args:
-            event_id: The event_id to book.
-            category: Ticket category, e.g. 'VIP', 'Gold', 'Silver' — must match get_ticket_categories exactly.
-            seats: Number of seats to book.
-        """
+Args:
+    event_id: The event_id to book.
+    category: Ticket category, e.g. 'VIP', 'Gold', 'Silver' — must match get_ticket_categories exactly.
+    seats: Number of seats to book.
+"""
         logger.info(f"[web:{self.user_id}] Executing Tool book_ticket event_id={event_id}, category={category}, seats={seats}")
         res = await asyncio.to_thread(voice_db.book_ticket_for_user, self.user_id, event_id, category, seats)
         return res["message"]

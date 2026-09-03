@@ -12,6 +12,8 @@ import logging
 import time
 import uuid
 import razorpay
+from datetime import date
+from zoneinfo import ZoneInfo
 from app.supabase_client import supabase_admin
 from app.config import RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET
 
@@ -71,26 +73,49 @@ def find_or_create_user_by_phone(phone: str, name: str | None = None) -> dict:
 # name/city driven, like the Admin Agent's list_events tool.
 # ---------------------------------------------------------------------------
 def search_events(query: str | None = None, city: str | None = None) -> dict:
-    """Searches upcoming events by artist/event name (partial match) and/or city."""
-    q = supabase_admin.table("events").select("event_id, artist_name, venue_name, city, event_date, event_type")
+    """Searches upcoming events by artist/event name and/or city."""
+    today = date.today().isoformat()
+
+    q = (
+        supabase_admin
+        .table("events")
+        .select(
+            "event_id, artist_name, venue_name, city, event_date, event_type"
+        )
+        .gte("event_date", today)
+    )
+
     if city:
         q = q.eq("city", city)
+
     result = q.execute()
 
     rows = result.data or []
+
     if query:
         needle = query.strip().lower()
-        rows = [r for r in rows if needle in (r.get("artist_name") or "").lower()]
+        rows = [
+            r for r in rows
+            if needle in (r.get("artist_name") or "").lower()
+        ]
 
     if not rows:
-        return {"success": False, "message": f"No upcoming events found matching '{query or city}'."}
+        return {
+            "success": False,
+            "message": f"No upcoming events found matching '{query or city}'."
+        }
 
     lines = [
-        f"{r['artist_name']} at {r['venue_name']}, {r['city']} on {r['event_date']} (event_id: {r['event_id']})"
+        f"{r['artist_name']} at {r['venue_name']}, {r['city']} "
+        f"on {r['event_date']} (event_id: {r['event_id']})"
         for r in rows
     ]
-    return {"success": True, "message": "Found these events:\n" + "\n".join(lines), "events": rows}
 
+    return {
+        "success": True,
+        "message": "Found these upcoming events:\n" + "\n".join(lines),
+        "events": rows,
+    }
 
 def get_ticket_categories(event_id: str) -> dict:
     """Returns ticket categories, prices, and seat availability for an event."""
@@ -134,6 +159,29 @@ def _create_booking_and_payment_link(user_id: str, event_id: str, category: str,
     or when the user has separately opted in via notify_telegram_for_website).
     It must reflect the ACTUAL channel, not be guessed from unrelated fields
     like whether a phone number happens to be on file."""
+    event_result = (
+        supabase_admin
+        .table("events")
+        .select("event_id, artist_name, event_date")
+        .eq("event_id", event_id)
+        .single()
+        .execute()
+    )
+
+    if not event_result.data:
+        return {
+            "success": False,
+            "message": "The selected event could not be found."
+        }
+
+    event = event_result.data
+    today = date.today().isoformat()
+
+    if str(event.get("event_date")) < today:
+        return {
+            "success": False,
+            "message": "This event has already taken place and cannot be booked."
+        }
     rpc_result = supabase_admin.rpc(
         "book_ticket_transaction",
         {
