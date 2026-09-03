@@ -26,6 +26,11 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # "Telegram Trigger" + "Send a text message" nodes)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
+# Dograh voice agent — shared secret checked on every /dograh/* tool call.
+# Set the SAME value here and as the "X-Dograh-Tool-Key" header on every
+# HTTP API Tool you configure inside the Dograh workflow builder.
+DOGRAH_TOOL_API_KEY = os.getenv("DOGRAH_TOOL_API_KEY")
+
 if not SUPABASE_URL or not SUPABASE_ANON_KEY:
     raise RuntimeError(
         "SUPABASE_URL and SUPABASE_ANON_KEY must be set in your .env file"

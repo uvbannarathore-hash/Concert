@@ -1,6 +1,10 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { Room, RoomEvent, Track } from 'livekit-client'
 import { api } from '../lib/api'
+
+// NOTE: livekit-client is no longer used here — Dograh's embed script
+// (loaded once in index.html) handles the WebRTC connection, mic capture,
+// and agent audio playback internally via window.DograhWidget. This
+// component just drives that API and keeps the exact same UI/UX as before.
 
 const STATE = {
   IDLE: 'idle',
@@ -10,35 +14,65 @@ const STATE = {
   ERROR: 'error',
 }
 
+// Dograh's onStatusChange only reports: idle | connecting | connected | failed.
+// There is no dedicated "agent is currently speaking" event exposed by the
+// widget API, so unlike the old LiveKit ActiveSpeakersChanged-driven
+// AGENT_SPEAKING state, this widget will show CONNECTED ("Listening...")
+// for the whole duration of the call rather than switching to
+// AGENT_SPEAKING while the agent talks. The STATE.AGENT_SPEAKING constant
+// is kept only so the JSX below still compiles/looks the same; it is never
+// set by this version. Remove it if you don't need the placeholder.
+
 export default function VoiceWidget() {
   const loggedIn = api.isLoggedIn()
 
   const [isOpen, setIsOpen] = useState(false)
   const [state, setState] = useState(STATE.IDLE)
   const [error, setError] = useState('')
+  const [widgetReady, setWidgetReady] = useState(false)
 
-  const roomRef = useRef(null)
-  const audioElRef = useRef(null)
   const drawerRef = useRef(null)
 
-  const disconnect = useCallback(async () => {
-    const room = roomRef.current
+  // Poll for window.DograhWidget since the embed <script> in index.html
+  // loads asynchronously and may not exist yet on first render.
+  useEffect(() => {
+    let retries = 0
+    let cancelled = false
 
-    if (room) {
-      try {
-        await room.localParticipant.setMicrophoneEnabled(false)
-      } catch (_) {}
+    function tryInit() {
+      if (cancelled) return
 
-      await room.disconnect()
-      roomRef.current = null
+      if (window.DograhWidget) {
+        setWidgetReady(true)
+
+        window.DograhWidget.onStatusChange((status) => {
+          // status: 'idle' | 'connecting' | 'connected' | 'failed'
+          if (status === 'connecting') setState(STATE.CONNECTING)
+          else if (status === 'connected') setState(STATE.CONNECTED)
+          else if (status === 'failed') setState(STATE.ERROR)
+          else setState(STATE.IDLE)
+        })
+
+        window.DograhWidget.onError((err) => {
+          console.error('Voice connection error:', err)
+          setError(err?.message || 'Could not start the voice assistant')
+          setState(STATE.ERROR)
+        })
+
+        window.DograhWidget.onCallEnd(() => {
+          setState(STATE.IDLE)
+        })
+      } else if (retries++ < 50) {
+        setTimeout(tryInit, 100)
+      } else {
+        console.error('Dograh widget script did not load in time.')
+      }
     }
 
-    setState(STATE.IDLE)
-  }, [])
+    tryInit()
 
-  useEffect(() => {
     return () => {
-      roomRef.current?.disconnect()
+      cancelled = true
     }
   }, [])
 
@@ -62,99 +96,32 @@ export default function VoiceWidget() {
 
   if (!loggedIn) return null
 
-  async function startCall() {
+  const startCall = useCallback(() => {
+    if (!widgetReady || !window.DograhWidget) {
+      setError('Voice assistant is still loading, try again in a moment.')
+      return
+    }
+
     setError('')
     setState(STATE.CONNECTING)
 
-    try {
-      const { livekit_url, token } = await api.getVoiceToken()
+    // Optionally pass page/user context to the agent, e.g. so prompts can
+    // reference {{initial_context.customer_name}}. Uncomment and adapt:
+    // window.DograhWidget.setContext({
+    //   customer_name: api.getCurrentUser?.()?.name,
+    // })
 
-      const room = new Room({
-        // Keep the connection lightweight.
-        adaptiveStream: true,
+    // Must run inside this click handler (user gesture) or the browser
+    // will refuse microphone access.
+    window.DograhWidget.start()
+  }, [widgetReady])
 
-        // These are the important microphone defaults.
-        audioCaptureDefaults: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-
-          // Browser support varies, so this is only a preference.
-          voiceIsolation: true,
-
-          // Mono is enough for speech and keeps processing simple.
-          channelCount: 1,
-        },
-
-        disconnectOnPageLeave: true,
-      })
-
-      roomRef.current = room
-
-      room.on(RoomEvent.TrackSubscribed, (track) => {
-        if (track.kind === Track.Kind.Audio) {
-          const audioElement = track.attach()
-
-          audioElement.autoplay = true
-          audioElement.setAttribute('playsinline', '')
-
-          audioElRef.current = audioElement
-
-          // Prevent the agent audio from being accidentally
-          // muted by browser media policies.
-          audioElement.volume = 1.0
-        }
-      })
-
-      room.on(RoomEvent.TrackUnsubscribed, (track) => {
-        if (track.kind === Track.Kind.Audio) {
-          track.detach()
-        }
-      })
-
-      room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
-        const agentSpeaking = speakers.some(
-          (participant) => !participant.isLocal
-        )
-
-        setState((prev) => {
-          if (prev === STATE.ERROR) return prev
-
-          return agentSpeaking
-            ? STATE.AGENT_SPEAKING
-            : STATE.CONNECTED
-        })
-      })
-
-      room.on(RoomEvent.Disconnected, () => {
-        roomRef.current = null
-        setState(STATE.IDLE)
-      })
-
-      await room.connect(livekit_url, token)
-
-      // Explicitly enable browser/WebRTC audio processing.
-      await room.localParticipant.setMicrophoneEnabled(true, {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-        voiceIsolation: true,
-        channelCount: 1,
-      })
-
-      setState(STATE.CONNECTED)
-    } catch (err) {
-      console.error('Voice connection error:', err)
-
-      setError(
-        err?.message || 'Could not start the voice assistant'
-      )
-
-      setState(STATE.ERROR)
-
-      roomRef.current = null
+  const disconnect = useCallback(() => {
+    if (window.DograhWidget) {
+      window.DograhWidget.end()
     }
-  }
+    setState(STATE.IDLE)
+  }, [])
 
   const isLive =
     state === STATE.CONNECTED ||
@@ -178,12 +145,6 @@ export default function VoiceWidget() {
           </span>
         )}
       </button>
-
-      <audio
-        ref={audioElRef}
-        autoPlay
-        playsInline
-      />
 
       {isOpen && (
         <div

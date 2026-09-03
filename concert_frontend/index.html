@@ -7,6 +7,22 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Anton&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <!-- Dograh Widget -->
+    <script>
+      (function(d, s, id) {
+        var js, fjs = d.getElementsByTagName(s)[0];
+        if (d.getElementById(id)) return;
+        js = d.createElement(s); js.id = id;
+        js.src = 'http://localhost:3010/embed/dograh-widget.js?token=emb_OXLTUhW33HR--KoZe5DCDB1xz83HWf8QePR-lci-bo0&environment=local&apiEndpoint=http://localhost:8000';
+        js.setAttribute('data-dograh-context', JSON.stringify({
+          page_url: window.location.href,
+          today: new Date().toISOString().slice(0, 10)
+        }));
+        js.async = true;
+        fjs.parentNode.insertBefore(js, fjs);
+      }(document, 'script', 'dograh-widget'));
+    </script>
   </head>
   <body class="bg-void text-paper">
     <div id="root"></div>
