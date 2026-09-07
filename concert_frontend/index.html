@@ -10,19 +10,21 @@
 
     <!-- Dograh Widget -->
     <script>
-      (function(d, s, id) {
-        var js, fjs = d.getElementsByTagName(s)[0];
-        if (d.getElementById(id)) return;
-        js = d.createElement(s); js.id = id;
-        js.src = 'http://localhost:3010/embed/dograh-widget.js?token=emb_OXLTUhW33HR--KoZe5DCDB1xz83HWf8QePR-lci-bo0&environment=local&apiEndpoint=http://localhost:8000';
-        js.setAttribute('data-dograh-context', JSON.stringify({
-          page_url: window.location.href,
-          today: new Date().toISOString().slice(0, 10)
-        }));
-        js.async = true;
-        fjs.parentNode.insertBefore(js, fjs);
-      }(document, 'script', 'dograh-widget'));
-    </script>
+  (function(d, s, id) {
+    var js, fjs = d.getElementsByTagName(s)[0];
+    if (d.getElementById(id)) return;
+    js = d.createElement(s); js.id = id;
+    js.src = 'http://localhost:3000/embed/dograh-widget.js?token=emb_amnzs0-tyfMQOoAr83lKGb-WTelenvjDPr0N13S2v4I&environment=local&apiEndpoint=http://localhost:8000';
+    // Details about this visitor, available in your prompts as
+    // {{initial_context.page_url}}. Edit these or add your own.
+    js.setAttribute('data-dograh-context', JSON.stringify({
+      page_url: window.location.href,
+      today: new Date().toISOString().slice(0, 10)
+    }));
+    js.async = true;
+    fjs.parentNode.insertBefore(js, fjs);
+  }(document, 'script', 'dograh-widget'));
+  </script>
   </head>
   <body class="bg-void text-paper">
     <div id="root"></div>
