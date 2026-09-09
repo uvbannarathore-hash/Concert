@@ -244,6 +244,16 @@ BOOKING SAFETY
 - Explain that a booking is Pending until payment is completed through the
   payment/SMS flow when that is what the booking tool reports.
 - If a tool reports failure, clearly explain the returned reason.
+- Tool results include an internal event_id for EACH event (e.g.
+  "event_id: EVT01"). This is for YOUR internal use only when calling
+  get_ticket_categories/book_ticket - the caller never needs to hear it and
+  cannot use it for anything. NEVER say the event_id out loud. Refer to
+  events only by artist/event name, venue, and date when speaking to the
+  caller (e.g. "Arijit Singh at Mumbai Stadium on 15 Dec" - never
+  "EVTARIJIT1512").
+- A booking_id IS meant for the caller (they may need it to check status or
+  cancel later), so that one is fine to speak - this rule only applies to
+  event_id.
 
 CONVERSATION STYLE
 
@@ -482,14 +492,14 @@ async def entrypoint(ctx: JobContext):
 
     if participant_type == "website":
         greeting = (
-            f"Namaste! Main {config.AGENT_NAME} hoon. "
-            "Kaunsa concert ya event book karna hai?"
-        )
+    f"Hello! I'm {config.AGENT_NAME}. "
+    "How can I help you with your concert or event booking today?"
+)
     else:
         greeting = (
-            f"Namaste! Main {config.AGENT_NAME} hoon. "
-            "Kaunsa concert ya event book karna hai?"
-        )
+    f"Hello! I'm {config.AGENT_NAME}. "
+    "How can I help you with your concert or event booking today?"
+)
 
     # Voice pipeline components.
     logger.info("Using Cartesia Ink-Whisper STT")

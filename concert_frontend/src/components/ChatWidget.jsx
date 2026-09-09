@@ -43,6 +43,7 @@ function linkify(text) {
 export default function ChatWidget() {
   const location = useLocation()
   const [loggedIn, setLoggedIn] = useState(api.isLoggedIn())
+  const [isAdmin, setIsAdmin] = useState(false)
   const [isOpen, setIsOpen] = useState(false)
   const [messages, setMessages] = useState([
     {
@@ -64,6 +65,17 @@ export default function ChatWidget() {
     window.addEventListener('storage', checkLogin)
     return () => window.removeEventListener('storage', checkLogin)
   }, [location.pathname])
+
+  // Admins get their own agent-chat inside the Admin dashboard - this
+  // customer-facing widget should stay hidden for them, same as NavBar
+  // only shows the customer nav links to non-admins.
+  useEffect(() => {
+    if (!loggedIn) {
+      setIsAdmin(false)
+      return
+    }
+    api.myProfile().then((p) => setIsAdmin(!!p?.is_admin)).catch(() => {})
+  }, [loggedIn])
 
   // Scroll to bottom when messages update
   useEffect(() => {
@@ -155,8 +167,8 @@ export default function ChatWidget() {
       setSending(false)
     }
   }
-    // Only render floating chat assistant when the user is logged in
-  if (!loggedIn) {
+    // Only render floating chat assistant for logged-in, non-admin customers
+  if (!loggedIn || isAdmin) {
     return null
   }
   return (

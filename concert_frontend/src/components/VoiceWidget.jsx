@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
+import { useLocation } from 'react-router-dom'
 import { Room, RoomEvent, Track } from 'livekit-client'
 import { api } from '../lib/api'
 
@@ -11,7 +12,9 @@ const STATE = {
 }
 
 export default function VoiceWidget() {
-  const loggedIn = api.isLoggedIn()
+  const location = useLocation()
+  const [loggedIn, setLoggedIn] = useState(api.isLoggedIn())
+  const [isAdmin, setIsAdmin] = useState(false)
 
   const [isOpen, setIsOpen] = useState(false)
   const [state, setState] = useState(STATE.IDLE)
@@ -42,6 +45,27 @@ export default function VoiceWidget() {
     }
   }, [])
 
+  // Keep loggedIn state in sync with route changes or storage events
+  // (same pattern as ChatWidget) - otherwise this stays stuck at whatever
+  // api.isLoggedIn() returned on first mount, even after the user logs in.
+  useEffect(() => {
+    const checkLogin = () => setLoggedIn(api.isLoggedIn())
+    checkLogin()
+    window.addEventListener('storage', checkLogin)
+    return () => window.removeEventListener('storage', checkLogin)
+  }, [location.pathname])
+
+  // The backend already blocks admins from booking via voice
+  // (see voice_routes.py get_voice_token 403), so hide the FAB for them
+  // too instead of letting them open it and hit an error.
+  useEffect(() => {
+    if (!loggedIn) {
+      setIsAdmin(false)
+      return
+    }
+    api.myProfile().then((p) => setIsAdmin(!!p?.is_admin)).catch(() => {})
+  }, [loggedIn])
+
   useEffect(() => {
     function handleClickOutside(event) {
       if (
@@ -60,7 +84,7 @@ export default function VoiceWidget() {
     }
   }, [])
 
-  if (!loggedIn) return null
+  if (!loggedIn || isAdmin) return null
 
   async function startCall() {
     setError('')
