@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from app.auth import get_current_user
 from app.agents import customer_agent
@@ -19,6 +19,12 @@ async def chat(payload: ChatRequest, current_user: dict = Depends(get_current_us
     session_id used for persistent conversation memory (see
     app/agents/memory.py - backed by the chat_history table).
     """
+    if current_user.get("is_admin"):
+        raise HTTPException(
+            status_code=403,
+            detail="Admin accounts should use the Admin dashboard's agent chat instead.",
+        )
+
     reply = await customer_agent.handle_website_message(
         user_id=current_user["user_id"],
         session_id=payload.session_id,
