@@ -27,12 +27,18 @@ serve(async (req) => {
     const record = payload.record;      // the new row state
     const oldRecord = payload.old_record; // the previous row state
 
-    // 2. Only act when status just transitioned INTO "Confirmed"
-    //    (so re-saving the row later doesn't re-send notifications).
+    // 2. Only act when status just transitioned INTO "Confirmed", "Cancelled",
+    //    or when reminder_sent transitioned to true.
     const justConfirmed =
       record?.status === "Confirmed" && oldRecord?.status !== "Confirmed";
 
-    if (!justConfirmed) {
+    const justCancelled =
+      record?.status === "Cancelled" && oldRecord?.status !== "Cancelled";
+
+    const justReminded =
+      record?.reminder_sent === true && oldRecord?.reminder_sent !== true;
+
+    if (!justConfirmed && !justCancelled && !justReminded) {
       return new Response(JSON.stringify({ skipped: true }), { status: 200 });
     }
 
@@ -67,7 +73,54 @@ serve(async (req) => {
       ? `Event: ${event.artist_name}${event.venue_name ? ` @ ${event.venue_name}` : ""}${event.event_date ? ` on ${event.event_date}` : ""}\n`
       : "";
 
-    const message = `Your booking is confirmed!\n\n${eventLine}Booking ID: ${record.booking_id}\nCategory: ${record.category}\nSeats: ${record.seats_booked}\n\nSee you at the show!`;
+    let subject = "";
+    let emailHtml = "";
+    let telegramMessage = "";
+
+    if (justConfirmed) {
+      subject = "Your booking is confirmed!";
+      telegramMessage = `Your booking is confirmed!\n\n${eventLine}Booking ID: ${record.booking_id}\nCategory: ${record.category}\nSeats: ${record.seats_booked}\n\nSee you at the show!`;
+      emailHtml = `
+        <h2>Booking Confirmed</h2>
+        <p>Hi ${user?.name || "there"},</p>
+        <p>Your booking is confirmed. Details:</p>
+        <ul>
+          ${event ? `<li><strong>Event:</strong> ${event.artist_name}${event.venue_name ? ` @ ${event.venue_name}` : ""}</li>` : ""}
+          <li><strong>Booking ID:</strong> ${record.booking_id}</li>
+          <li><strong>Category:</strong> ${record.category}</li>
+          <li><strong>Seats:</strong> ${record.seats_booked}</li>
+        </ul>
+        <p>See you at the show!</p>
+      `;
+    } else if (justCancelled) {
+      subject = "Your booking has been cancelled";
+      telegramMessage = `Your booking has been cancelled.\n\n${eventLine}Booking ID: ${record.booking_id}\n\nIf you have already paid, your refund is being processed and will reflect in your account soon.`;
+      emailHtml = `
+        <h2>Booking Cancelled</h2>
+        <p>Hi ${user?.name || "there"},</p>
+        <p>Your booking has been cancelled. Details:</p>
+        <ul>
+          ${event ? `<li><strong>Event:</strong> ${event.artist_name}${event.venue_name ? ` @ ${event.venue_name}` : ""}</li>` : ""}
+          <li><strong>Booking ID:</strong> ${record.booking_id}</li>
+        </ul>
+        <p>If you have already paid, your refund is being processed and will reflect in your account soon.</p>
+      `;
+    } else if (justReminded) {
+      subject = "Reminder: Your upcoming event is tomorrow!";
+      telegramMessage = `Reminder: Your upcoming event is tomorrow!\n\n${eventLine}Booking ID: ${record.booking_id}\nCategory: ${record.category}\nSeats: ${record.seats_booked}\n\nGet ready for an amazing experience!`;
+      emailHtml = `
+        <h2>Event Reminder</h2>
+        <p>Hi ${user?.name || "there"},</p>
+        <p>This is a quick reminder that your event is coming up tomorrow! Details:</p>
+        <ul>
+          ${event ? `<li><strong>Event:</strong> ${event.artist_name}${event.venue_name ? ` @ ${event.venue_name}` : ""}</li>` : ""}
+          <li><strong>Booking ID:</strong> ${record.booking_id}</li>
+          <li><strong>Category:</strong> ${record.category}</li>
+          <li><strong>Seats:</strong> ${record.seats_booked}</li>
+        </ul>
+        <p>Get ready for an amazing experience! See you there.</p>
+      `;
+    }
 
     const tasks: Promise<Response>[] = [];
 
@@ -86,7 +139,7 @@ serve(async (req) => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             chat_id: user.telegram_chat_id,
-            text: message,
+            text: telegramMessage,
           }),
         })
       );
@@ -111,19 +164,8 @@ serve(async (req) => {
           .send({
             from: GMAIL_ADDRESS,
             to: user.email,
-            subject: "Your booking is confirmed!",
-            html: `
-              <h2>Booking Confirmed</h2>
-              <p>Hi ${user.name || "there"},</p>
-              <p>Your booking is confirmed. Details:</p>
-              <ul>
-                ${event ? `<li><strong>Event:</strong> ${event.artist_name}${event.venue_name ? ` @ ${event.venue_name}` : ""}</li>` : ""}
-                <li><strong>Booking ID:</strong> ${record.booking_id}</li>
-                <li><strong>Category:</strong> ${record.category}</li>
-                <li><strong>Seats:</strong> ${record.seats_booked}</li>
-              </ul>
-              <p>See you at the show!</p>
-            `,
+            subject: subject,
+            html: emailHtml,
           })
           .then(() => client.close())
           .then(() => new Response("ok")) // keep return type consistent with the Telegram fetch task

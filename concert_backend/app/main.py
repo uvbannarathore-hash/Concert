@@ -4,8 +4,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from app.routes import artist_routes
 from app.limiter import limiter
-from app.routes import auth_routes, chat_routes, concert_routes, booking_routes, admin_routes, wishlist_routes, voice_routes, telegram_routes, show_routes
+from app.routes import auth_routes, chat_routes, concert_routes, booking_routes, admin_routes, wishlist_routes, voice_routes, telegram_routes, show_routes, coupon_routes, venue_routes
 
 app = FastAPI(title="Concert Booking Assistant API")
 
@@ -64,6 +65,9 @@ app.include_router(wishlist_routes.router)
 app.include_router(voice_routes.router)
 app.include_router(telegram_routes.router)
 app.include_router(show_routes.router)
+app.include_router(coupon_routes.router)
+app.include_router(artist_routes.router)
+app.include_router(venue_routes.router)
 
 
 @app.get("/")

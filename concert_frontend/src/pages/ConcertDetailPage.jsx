@@ -62,6 +62,17 @@ export default function ConcertDetailPage() {
   const [selectedSeatIds, setSelectedSeatIds] = useState([])
   const [selectedSeatCategory, setSelectedSeatCategory] = useState(null)
 
+  const [couponCode, setCouponCode] = useState('')
+  const [appliedCoupon, setAppliedCoupon] = useState(null)
+  const [couponError, setCouponError] = useState('')
+  const [couponLoading, setCouponLoading] = useState(false)
+
+  useEffect(() => {
+    setAppliedCoupon(null)
+    setCouponCode('')
+    setCouponError('')
+  }, [seats, selected, selectedSeatIds])
+
   useEffect(() => {
     api
       .getConcert(eventId)
@@ -138,6 +149,23 @@ export default function ConcertDetailPage() {
     ? findTicketFor(selectedSeatCategory)?.price_inr || 0
     : 0
 
+  async function handleApplyCoupon() {
+    if (!couponCode.trim()) return
+    setCouponLoading(true)
+    setCouponError('')
+    setAppliedCoupon(null)
+    try {
+      const category = hasSeatMap ? selectedSeatCategory : selected?.category
+      const seatsCount = hasSeatMap ? selectedSeatIds.length : seats
+      const res = await api.validateCoupon(couponCode.trim(), eventId, category, seatsCount)
+      setAppliedCoupon(res)
+    } catch (err) {
+      setCouponError(err.message)
+    } finally {
+      setCouponLoading(false)
+    }
+  }
+
   async function handlePay() {
     if (!api.isLoggedIn()) {
       navigate('/login')
@@ -166,9 +194,9 @@ export default function ConcertDetailPage() {
     try {
       if (hasSeatMap) {
         await api.lockSeats(eventId, selectedSeatIds)
-        order = await api.createOrderSeats(eventId, selectedSeatIds)
+        order = await api.createOrderSeats(eventId, selectedSeatIds, appliedCoupon?.code)
       } else {
-        order = await api.createOrder(eventId, selected.category, seats)
+        order = await api.createOrder(eventId, selected.category, seats, appliedCoupon?.code)
       }
     } catch (err) {
       setError(err.message)
@@ -269,7 +297,8 @@ export default function ConcertDetailPage() {
     )
   }
 
-  const total = hasSeatMap ? seatCategoryPrice * selectedSeatIds.length : (selected ? selected.price_inr * seats : 0)
+  const originalTotal = hasSeatMap ? seatCategoryPrice * selectedSeatIds.length : (selected ? selected.price_inr * seats : 0)
+  const total = appliedCoupon ? appliedCoupon.final_amount : originalTotal
   const canPay = hasSeatMap ? selectedSeatIds.length > 0 : Boolean(selected)
   const bookedCategory = hasSeatMap ? selectedSeatCategory : selected?.category
   const bookedSeatCount = hasSeatMap ? selectedSeatIds.length : seats
@@ -419,9 +448,13 @@ export default function ConcertDetailPage() {
 
           <div className="space-y-2">
             <p className="eyebrow">{event.city} · {formatDate(event.event_date)}</p>
-            <h1 className="font-display text-5xl sm:text-6xl tracking-wide uppercase text-paper">{event.artist_name}</h1>
+            <h1 className="font-display text-5xl sm:text-6xl tracking-wide uppercase text-paper hover:text-spot transition-colors">
+              <Link to={`/artists/${event.artist_id}`}>
+                {event.artist_name}
+              </Link>
+            </h1>
             <p className="text-base text-haze flex items-center gap-1">
-              📍 {event.venue_name} — {event.event_time}
+              📍 <Link to={`/venues/${event.venue_id}`} className="hover:underline hover:text-spot2 transition-colors">{event.venue_name}</Link> — {event.event_time}
             </p>
           </div>
 
@@ -597,10 +630,36 @@ export default function ConcertDetailPage() {
 
             {canPay && (
               <div className="border-t border-white/[0.04] pt-4 mt-6 space-y-4">
-                <div className="flex items-end justify-between">
+                
+                {/* Promo Code Input */}
+                <div className="space-y-2">
+                  <label className="text-xs font-mono text-haze uppercase tracking-wider">Promo Code</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={couponCode}
+                      onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+                      placeholder="Enter code"
+                      disabled={!!appliedCoupon || status === 'paying'}
+                      className="field flex-1 text-sm font-mono uppercase"
+                    />
+                    {appliedCoupon ? (
+                      <button onClick={() => { setAppliedCoupon(null); setCouponCode(''); }} disabled={status === 'paying'} className="btn-ghost text-xs uppercase px-4">Remove</button>
+                    ) : (
+                      <button onClick={handleApplyCoupon} disabled={!couponCode.trim() || couponLoading || status === 'paying'} className="btn-ghost text-xs uppercase px-4">
+                        {couponLoading ? 'Checking...' : 'Apply'}
+                      </button>
+                    )}
+                  </div>
+                  {couponError && <p className="text-spot text-xs font-mono">❌ {couponError}</p>}
+                  {appliedCoupon && <p className="text-go text-xs font-mono">✅ {appliedCoupon.message}. Saved ₹{appliedCoupon.discount_amount}!</p>}
+                </div>
+
+                <div className="flex items-end justify-between border-t border-white/[0.04] pt-4">
                   <div>
                     <span className="text-[10px] font-mono text-haze uppercase block">Total Due</span>
                     <span className="font-display text-3xl text-spot2">₹{total}</span>
+                    {appliedCoupon && <span className="text-xs text-haze line-through ml-2">₹{originalTotal}</span>}
                   </div>
 
                   {isAdmin !== false ? (

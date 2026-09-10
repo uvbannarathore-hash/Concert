@@ -159,8 +159,8 @@ export const api = {
 
   myBookings: () => request('/bookings/me', { auth: true }),
 
-  createOrder: (event_id, category, seats) =>
-    request('/bookings/create-order', { method: 'POST', auth: true, body: { event_id, category, seats } }),
+  createOrder: (event_id, category, seats, coupon_code) =>
+    request('/bookings/create-order', { method: 'POST', auth: true, body: { event_id, category, seats, coupon_code } }),
 
   verifyPayment: ({ booking_id, razorpay_order_id, razorpay_payment_id, razorpay_signature }) =>
     request('/bookings/verify-payment', {
@@ -239,11 +239,58 @@ export const api = {
   releaseSeats: (seat_ids) =>
     request('/bookings/release-seats', { method: 'POST', auth: true, body: { seat_ids } }),
 
-  createOrderSeats: (event_id, seat_ids) =>
-    request('/bookings/create-order-seats', { method: 'POST', auth: true, body: { event_id, seat_ids } }),
+  createOrderSeats: (event_id, seat_ids, coupon_code) =>
+    request('/bookings/create-order-seats', { method: 'POST', auth: true, body: { event_id, seat_ids, coupon_code } }),
 
   // Public digital pass endpoint — no auth required, used by QR code scanner / verification page
   getTicketPass: (bookingId) => request(`/bookings/${bookingId}/pass`),
+
+  // Coupons
+  validateCoupon: (code, event_id, category, seats) =>
+    request('/coupons/validate', { method: 'POST', auth: true, body: { code, event_id, category, seats } }),
+
+  adminCreateCoupon: (data) =>
+    request('/admin/coupons', { method: 'POST', auth: true, body: data }),
+
+  adminGetCoupons: () =>
+    request('/admin/coupons', { auth: true }),
+
+  adminToggleCoupon: (coupon_id, is_active) =>
+    request(`/admin/coupons/${coupon_id}`, { method: 'PATCH', auth: true, body: { is_active } }),
+
+  // Artists
+  getArtists: () => request('/artists'),
+  getArtist: (artistId) => request(`/artists/${artistId}`),
+  adminUpdateArtist: (artistId, data) => request(`/admin/artists/${artistId}`, { method: 'PATCH', auth: true, body: data }),
+  adminUploadArtistImage: async (artistId, imageFile) => {
+    const token = getToken()
+    const formData = new FormData()
+    formData.append('image', imageFile)
+    const res = await fetch(`${BASE_URL}/admin/artists/${artistId}/upload-image`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData,
+    })
+    if (!res.ok) throw new Error('Image upload failed')
+    return res.json()
+  },
+
+  // Venues
+  getVenues: () => request('/venues'),
+  getVenue: (venueId) => request(`/venues/${venueId}`),
+  adminUpdateVenue: (venueId, data) => request(`/admin/venues/${venueId}`, { method: 'PATCH', auth: true, body: data }),
+  adminUploadVenueImage: async (venueId, imageFile) => {
+    const token = getToken()
+    const formData = new FormData()
+    formData.append('image', imageFile)
+    const res = await fetch(`${BASE_URL}/admin/venues/${venueId}/upload-image`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData,
+    })
+    if (!res.ok) throw new Error('Image upload failed')
+    return res.json()
+  },
 }
 
 export function getPublicPassUrl(bookingId) {

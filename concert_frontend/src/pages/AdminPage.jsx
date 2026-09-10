@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { adminApi } from '../lib/adminApi'
+import { api } from '../lib/api'
 
 const emptyEvent = {
   artist_id: '', artist_name: '', venue_id: '', venue_name: '',
@@ -21,6 +22,24 @@ export default function AdminPage() {
   const [submissionsLoading, setSubmissionsLoading] = useState(false)
   const [submissionFilter, setSubmissionFilter] = useState('Pending')
   const [processingSubmissionId, setProcessingSubmissionId] = useState(null)
+
+  // Coupons
+  const emptyCoupon = { code: '', discount_type: 'percentage', discount_value: '', max_uses: '', max_uses_per_user: 1, event_id: '', valid_from: '', valid_until: '' }
+  const [couponForm, setCouponForm] = useState(emptyCoupon)
+  const [coupons, setCoupons] = useState([])
+  const [couponsLoading, setCouponsLoading] = useState(false)
+
+  // Artists
+  const [artists, setArtists] = useState([])
+  const [artistsLoading, setArtistsLoading] = useState(false)
+  const [editingArtistId, setEditingArtistId] = useState(null)
+  const [artistForm, setArtistForm] = useState({ bio: '', facebook: '', instagram: '', twitter: '', website: '' })
+
+  // Venues
+  const [venues, setVenues] = useState([])
+  const [venuesLoading, setVenuesLoading] = useState(false)
+  const [editingVenueId, setEditingVenueId] = useState(null)
+  const [venueForm, setVenueForm] = useState({ address: '', capacity: '', latitude: '', longitude: '' })
 
   // Seat layout builder
   const [seatEventId, setSeatEventId] = useState('')
@@ -196,6 +215,68 @@ export default function AdminPage() {
     if (tab === 'submissions') loadSubmissions()
   }, [tab, submissionFilter])
 
+  function loadCoupons() {
+    setCouponsLoading(true)
+    api.adminGetCoupons()
+      .then(data => setCoupons(data.coupons || []))
+      .catch(err => setError(err.message))
+      .finally(() => setCouponsLoading(false))
+  }
+
+  function loadArtists() {
+    setArtistsLoading(true)
+    api.getArtists()
+      .then(data => setArtists(data.artists || []))
+      .catch(err => setError(err.message))
+      .finally(() => setArtistsLoading(false))
+  }
+
+  function loadVenues() {
+    setVenuesLoading(true)
+    api.getVenues()
+      .then(data => setVenues(data.venues || []))
+      .catch(err => setError(err.message))
+      .finally(() => setVenuesLoading(false))
+  }
+
+  useEffect(() => {
+    if (tab === 'coupons') loadCoupons()
+    if (tab === 'artists') loadArtists()
+    if (tab === 'venues') loadVenues()
+  }, [tab])
+
+  async function handleCreateCoupon(e) {
+    e.preventDefault()
+    setError('')
+    try {
+      const payload = {
+        ...couponForm,
+        discount_value: parseFloat(couponForm.discount_value),
+        max_uses: parseInt(couponForm.max_uses, 10),
+        max_uses_per_user: parseInt(couponForm.max_uses_per_user, 10),
+      }
+      if (!payload.event_id) delete payload.event_id
+      if (!payload.valid_from) delete payload.valid_from
+      if (!payload.valid_until) delete payload.valid_until
+      
+      await api.adminCreateCoupon(payload)
+      flash(setMsg, 'Coupon successfully created.')
+      setCouponForm(emptyCoupon)
+      loadCoupons()
+    } catch (err) {
+      flash(setError, err.message)
+    }
+  }
+
+  async function handleToggleCoupon(id, currentState) {
+    try {
+      await api.adminToggleCoupon(id, !currentState)
+      loadCoupons()
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
   async function handleApproveSubmission(id) {
     setProcessingSubmissionId(id)
     try {
@@ -311,8 +392,11 @@ export default function AdminPage() {
             { id: 'events', label: '📅 Event Setup', icon: '📝' },
             { id: 'pricing', label: '🎟️ Ticket Rates', icon: '🏷️' },
             { id: 'bookings', label: '📋 Bookings List', icon: '🧾' },
+            { id: 'coupons', label: '🏷️ Promo Codes', icon: '🎟️' },
             { id: 'submissions', label: '📬 Show Submissions', icon: '✅' },
             { id: 'seatmap', label: '💺 Seat Layout', icon: '🗺️' },
+            { id: 'artists', label: '🎤 Artists', icon: '👨‍🎤' },
+            { id: 'venues', label: '🏟️ Venues', icon: '🏟️' },
           ].map((item) => (
             <button
               key={item.id}
@@ -794,6 +878,346 @@ export default function AdminPage() {
             </div>
           )}
 
+          {/* 7. Coupons / Promo Codes Panel */}
+          {tab === 'coupons' && (
+            <div className="space-y-6">
+              <form onSubmit={handleCreateCoupon} className="glass-card bg-stage/15 border border-white/[0.04] rounded-2xl p-6 space-y-4 shadow-2xl">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-xl">🎫</span>
+                  <h2 className="font-display text-xl tracking-wide uppercase text-paper">Create Promo Code</h2>
+                </div>
+                
+                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  <Field label="Coupon Code" value={couponForm.code} onChange={v => setCouponForm({ ...couponForm, code: v.toUpperCase() })} placeholder="e.g. EARLYBIRD20" required />
+                  <div>
+                    <label className="block text-xs font-mono text-haze mb-1.5 uppercase">Discount Type</label>
+                    <select className="field font-mono text-sm py-2.5" value={couponForm.discount_type} onChange={e => setCouponForm({ ...couponForm, discount_type: e.target.value })}>
+                      <option value="percentage">Percentage (%)</option>
+                      <option value="fixed">Fixed Amount (₹)</option>
+                    </select>
+                  </div>
+                  <Field label="Discount Value" value={couponForm.discount_value} onChange={v => setCouponForm({ ...couponForm, discount_value: v })} placeholder="e.g. 20 or 500" type="number" required />
+                  <Field label="Max Total Uses" value={couponForm.max_uses} onChange={v => setCouponForm({ ...couponForm, max_uses: v })} placeholder="e.g. 100" type="number" required />
+                  <Field label="Max Uses Per User" value={couponForm.max_uses_per_user} onChange={v => setCouponForm({ ...couponForm, max_uses_per_user: v })} type="number" required />
+                  <Field label="Event ID (Optional)" value={couponForm.event_id} onChange={v => setCouponForm({ ...couponForm, event_id: v })} placeholder="Limit to specific event" />
+                </div>
+                
+                <div className="grid sm:grid-cols-2 gap-4">
+                  <Field label="Valid From (Optional)" value={couponForm.valid_from} onChange={v => setCouponForm({ ...couponForm, valid_from: v })} type="datetime-local" />
+                  <Field label="Valid Until (Optional)" value={couponForm.valid_until} onChange={v => setCouponForm({ ...couponForm, valid_until: v })} type="datetime-local" />
+                </div>
+                <button type="submit" className="btn-spot w-full text-sm font-bold mt-2">Create Coupon</button>
+              </form>
+
+              <div className="space-y-4">
+                <h2 className="font-display text-xl text-paper uppercase tracking-wider mb-2">Active Promo Codes</h2>
+                {couponsLoading && <p className="text-xs font-mono text-haze">Loading…</p>}
+                {!couponsLoading && coupons.length === 0 && <p className="text-xs font-mono text-haze">No coupons created.</p>}
+                
+                <div className="space-y-3">
+                  {coupons.map((c) => (
+                    <div key={c.id} className="border border-white/[0.04] bg-white/[0.01] rounded-xl p-4 flex justify-between items-center gap-4">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-lg text-paper font-bold tracking-widest uppercase">{c.code}</span>
+                          <span className={`text-[10px] font-mono uppercase px-2 py-0.5 rounded border ${c.is_active ? 'border-go/20 text-go bg-go/5' : 'border-spot2/20 text-spot2 bg-spot2/5'}`}>
+                            {c.is_active ? 'Active' : 'Disabled'}
+                          </span>
+                        </div>
+                        <p className="text-xs text-haze mt-1 font-mono">
+                          {c.discount_type === 'percentage' ? `${c.discount_value}% OFF` : `₹${c.discount_value} OFF`} 
+                          {c.event_id ? ` · Event: ${c.event_id}` : ' · All Events'}
+                        </p>
+                        <p className="text-[10px] font-mono text-haze/60 mt-1">
+                          Uses: {c.current_uses} / {c.max_uses} (Max {c.max_uses_per_user} per user)
+                        </p>
+                      </div>
+                      <button onClick={() => handleToggleCoupon(c.id, c.is_active)} className="text-xs font-mono uppercase px-3 py-1.5 rounded-lg border border-white/[0.06] text-haze hover:text-paper">
+                        {c.is_active ? 'Disable' : 'Enable'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 8. Admin Artists Panel */}
+          {tab === 'artists' && (
+            <div className="space-y-4">
+              <h2 className="font-display text-xl text-paper uppercase tracking-wider mb-2">Artist Management</h2>
+              {artistsLoading && <p className="text-xs font-mono text-haze">Loading…</p>}
+              {!artistsLoading && artists.length === 0 && <p className="text-xs font-mono text-haze">No artists found.</p>}
+
+              <div className="space-y-4">
+                {artists.map((artist) => {
+                  const isEditing = editingArtistId === artist.artist_id
+                  const links = artist.social_links || {}
+                  
+                  return (
+                    <div key={artist.artist_id} className="border border-white/[0.04] bg-white/[0.01] rounded-xl p-5 flex flex-col gap-4">
+                      <div className="flex justify-between items-start">
+                        <div className="flex gap-4">
+                          <div className="w-16 h-16 rounded-full overflow-hidden bg-stage flex-shrink-0 border border-white/[0.05] relative group">
+                            {artist.image_url ? (
+                              <img src={artist.image_url} alt={artist.name} className="w-full h-full object-cover" />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center font-display text-2xl text-paper/30">{artist.name.charAt(0)}</div>
+                            )}
+                            {isEditing && (
+                              <label className="absolute inset-0 bg-void/60 flex items-center justify-center cursor-pointer opacity-0 group-hover:opacity-100 transition text-[10px] font-mono text-paper text-center">
+                                Upload
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  className="hidden"
+                                  onChange={async (e) => {
+                                    if (!e.target.files[0]) return
+                                    try {
+                                      await api.adminUploadArtistImage(artist.artist_id, e.target.files[0])
+                                      flash(setMsg, 'Image uploaded successfully')
+                                      loadArtists()
+                                    } catch (err) {
+                                      flash(setError, err.message)
+                                    }
+                                  }}
+                                />
+                              </label>
+                            )}
+                          </div>
+                          <div>
+                            <h3 className="font-display text-xl text-paper tracking-wide uppercase">{artist.name}</h3>
+                            <p className="text-[10px] font-mono text-spot2 mt-1">{artist.artist_id}</p>
+                          </div>
+                        </div>
+                        
+                        {!isEditing ? (
+                          <button
+                            onClick={() => {
+                              setEditingArtistId(artist.artist_id)
+                              setArtistForm({
+                                bio: artist.bio || '',
+                                facebook: links.facebook || '',
+                                instagram: links.instagram || '',
+                                twitter: links.twitter || '',
+                                website: links.website || ''
+                              })
+                            }}
+                            className="text-xs font-mono uppercase px-3 py-1.5 rounded-lg border border-white/[0.06] text-haze hover:text-paper"
+                          >
+                            Edit
+                          </button>
+                        ) : (
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => setEditingArtistId(null)}
+                              className="text-xs font-mono uppercase px-3 py-1.5 rounded-lg border border-white/[0.06] text-haze hover:text-paper"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              onClick={async () => {
+                                try {
+                                  const payload = {
+                                    bio: artistForm.bio,
+                                    social_links: {
+                                      facebook: artistForm.facebook,
+                                      instagram: artistForm.instagram,
+                                      twitter: artistForm.twitter,
+                                      website: artistForm.website
+                                    }
+                                  }
+                                  await api.adminUpdateArtist(artist.artist_id, payload)
+                                  flash(setMsg, 'Artist profile updated.')
+                                  setEditingArtistId(null)
+                                  loadArtists()
+                                } catch (err) {
+                                  flash(setError, err.message)
+                                }
+                              }}
+                              className="text-xs font-mono uppercase px-3 py-1.5 rounded-lg border border-go/40 bg-go/10 text-go hover:bg-go/20"
+                            >
+                              Save
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {isEditing ? (
+                        <div className="grid md:grid-cols-2 gap-4 mt-2 border-t border-white/[0.04] pt-4">
+                          <div className="md:col-span-2">
+                            <label className="block text-[10px] font-mono text-haze mb-1.5 uppercase tracking-wider">Biography</label>
+                            <textarea
+                              value={artistForm.bio}
+                              onChange={(e) => setArtistForm({ ...artistForm, bio: e.target.value })}
+                              className="w-full bg-void border border-white/[0.06] rounded-xl px-3 py-2 text-sm text-paper h-24 font-body"
+                              placeholder="Artist biography..."
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-mono text-haze mb-1.5 uppercase tracking-wider">Instagram URL</label>
+                            <input value={artistForm.instagram} onChange={(e) => setArtistForm({ ...artistForm, instagram: e.target.value })} className="w-full bg-void border border-white/[0.06] rounded-lg px-3 py-2 text-sm text-paper font-mono" />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-mono text-haze mb-1.5 uppercase tracking-wider">Twitter URL</label>
+                            <input value={artistForm.twitter} onChange={(e) => setArtistForm({ ...artistForm, twitter: e.target.value })} className="w-full bg-void border border-white/[0.06] rounded-lg px-3 py-2 text-sm text-paper font-mono" />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-mono text-haze mb-1.5 uppercase tracking-wider">Facebook URL</label>
+                            <input value={artistForm.facebook} onChange={(e) => setArtistForm({ ...artistForm, facebook: e.target.value })} className="w-full bg-void border border-white/[0.06] rounded-lg px-3 py-2 text-sm text-paper font-mono" />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-mono text-haze mb-1.5 uppercase tracking-wider">Website URL</label>
+                            <input value={artistForm.website} onChange={(e) => setArtistForm({ ...artistForm, website: e.target.value })} className="w-full bg-void border border-white/[0.06] rounded-lg px-3 py-2 text-sm text-paper font-mono" />
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mt-2 text-sm text-haze/80 font-body">
+                          {artist.bio ? <p className="line-clamp-2">{artist.bio}</p> : <p className="italic text-haze/40">No bio provided.</p>}
+                          {Object.values(links).some(Boolean) && (
+                            <div className="flex gap-3 mt-3 text-[10px] font-mono text-spot">
+                              {Object.entries(links).map(([k, v]) => v ? <a key={k} href={v} target="_blank" rel="noreferrer" className="hover:underline">{k}</a> : null)}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* 9. Admin Venues Panel */}
+          {tab === 'venues' && (
+            <div className="space-y-4">
+              <h2 className="font-display text-xl text-paper uppercase tracking-wider mb-2">Venue Management</h2>
+              {venuesLoading && <p className="text-xs font-mono text-haze">Loading…</p>}
+              {!venuesLoading && venues.length === 0 && <p className="text-xs font-mono text-haze">No venues found.</p>}
+
+              <div className="space-y-4">
+                {venues.map((venue) => {
+                  const isEditing = editingVenueId === venue.venue_id
+                  
+                  return (
+                    <div key={venue.venue_id} className="border border-white/[0.04] bg-white/[0.01] rounded-xl p-5 flex flex-col gap-4">
+                      <div className="flex justify-between items-start">
+                        <div className="flex gap-4">
+                          <div className="w-16 h-16 rounded-xl overflow-hidden bg-stage flex-shrink-0 border border-white/[0.05] relative group">
+                            {venue.image_url ? (
+                              <img src={venue.image_url} alt={venue.name} className="w-full h-full object-cover" />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center font-display text-2xl text-paper/30">{venue.name.charAt(0)}</div>
+                            )}
+                            {isEditing && (
+                              <label className="absolute inset-0 bg-void/60 flex items-center justify-center cursor-pointer opacity-0 group-hover:opacity-100 transition text-[10px] font-mono text-paper text-center">
+                                Upload
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  className="hidden"
+                                  onChange={async (e) => {
+                                    if (!e.target.files[0]) return
+                                    try {
+                                      await api.adminUploadVenueImage(venue.venue_id, e.target.files[0])
+                                      flash(setMsg, 'Image uploaded successfully')
+                                      loadVenues()
+                                    } catch (err) {
+                                      flash(setError, err.message)
+                                    }
+                                  }}
+                                />
+                              </label>
+                            )}
+                          </div>
+                          <div>
+                            <h3 className="font-display text-xl text-paper tracking-wide uppercase">{venue.name}</h3>
+                            <p className="text-xs text-haze mt-0.5">{venue.city}</p>
+                            <p className="text-[10px] font-mono text-spot2 mt-1">{venue.venue_id}</p>
+                          </div>
+                        </div>
+                        
+                        {!isEditing ? (
+                          <button
+                            onClick={() => {
+                              setEditingVenueId(venue.venue_id)
+                              setVenueForm({
+                                address: venue.address || '',
+                                capacity: venue.capacity || '',
+                                latitude: venue.latitude || '',
+                                longitude: venue.longitude || ''
+                              })
+                            }}
+                            className="text-xs font-mono uppercase px-3 py-1.5 rounded-lg border border-white/[0.06] text-haze hover:text-paper"
+                          >
+                            Edit
+                          </button>
+                        ) : (
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => setEditingVenueId(null)}
+                              className="text-xs font-mono uppercase px-3 py-1.5 rounded-lg border border-white/[0.06] text-haze hover:text-paper"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              onClick={async () => {
+                                try {
+                                  const payload = {
+                                    address: venueForm.address || null,
+                                    capacity: venueForm.capacity ? parseInt(venueForm.capacity, 10) : null,
+                                    latitude: venueForm.latitude ? parseFloat(venueForm.latitude) : null,
+                                    longitude: venueForm.longitude ? parseFloat(venueForm.longitude) : null,
+                                  }
+                                  await api.adminUpdateVenue(venue.venue_id, payload)
+                                  flash(setMsg, 'Venue profile updated.')
+                                  setEditingVenueId(null)
+                                  loadVenues()
+                                } catch (err) {
+                                  flash(setError, err.message)
+                                }
+                              }}
+                              className="text-xs font-mono uppercase px-3 py-1.5 rounded-lg border border-go/40 bg-go/10 text-go hover:bg-go/20"
+                            >
+                              Save
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {isEditing ? (
+                        <div className="grid md:grid-cols-2 gap-4 mt-2 border-t border-white/[0.04] pt-4">
+                          <div className="md:col-span-2">
+                            <label className="block text-[10px] font-mono text-haze mb-1.5 uppercase tracking-wider">Address</label>
+                            <input value={venueForm.address} onChange={(e) => setVenueForm({ ...venueForm, address: e.target.value })} className="w-full bg-void border border-white/[0.06] rounded-lg px-3 py-2 text-sm text-paper font-mono" />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-mono text-haze mb-1.5 uppercase tracking-wider">Capacity</label>
+                            <input type="number" value={venueForm.capacity} onChange={(e) => setVenueForm({ ...venueForm, capacity: e.target.value })} className="w-full bg-void border border-white/[0.06] rounded-lg px-3 py-2 text-sm text-paper font-mono" />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-mono text-haze mb-1.5 uppercase tracking-wider">Latitude</label>
+                            <input type="number" step="any" value={venueForm.latitude} onChange={(e) => setVenueForm({ ...venueForm, latitude: e.target.value })} className="w-full bg-void border border-white/[0.06] rounded-lg px-3 py-2 text-sm text-paper font-mono" />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-mono text-haze mb-1.5 uppercase tracking-wider">Longitude</label>
+                            <input type="number" step="any" value={venueForm.longitude} onChange={(e) => setVenueForm({ ...venueForm, longitude: e.target.value })} className="w-full bg-void border border-white/[0.06] rounded-lg px-3 py-2 text-sm text-paper font-mono" />
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mt-2 text-sm text-haze/80 font-body">
+                          {venue.address && <p className="mb-1 text-xs">📍 {venue.address}</p>}
+                          {venue.capacity && <p className="mb-1 text-[11px] font-mono opacity-60">Capacity: {venue.capacity}</p>}
+                          {venue.latitude != null && <p className="text-[10px] font-mono opacity-40 mt-2">Lat: {venue.latitude}, Lng: {venue.longitude}</p>}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
         </div>
 
       </div>
@@ -801,17 +1225,17 @@ export default function AdminPage() {
   )
 }
 
-function Field({ label, value, onChange, placeholder, type = 'text' }) {
+function Field({ label, value, onChange, placeholder, type = 'text', required = false }) {
   return (
     <div>
-      <label className="block text-xs font-mono text-haze/70 mb-1.5 uppercase">{label}</label>
+      <label className="block text-xs font-mono text-haze mb-1.5 uppercase">{label}</label>
       <input
         type={type}
-        required
-        className="field font-mono text-sm py-2.5"
+        required={required}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
+        className="field font-mono text-sm py-2.5"
       />
     </div>
   )

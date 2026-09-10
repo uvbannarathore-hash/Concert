@@ -45,6 +45,7 @@ class CreateOrderRequest(BaseModel):
     event_id: str
     category: str
     seats: int = Field(..., ge=1, le=20, description="Number of seats (1–20)")
+    coupon_code: str | None = None
 
 
 @router.post("/create-order")
@@ -72,7 +73,40 @@ def create_order(request: Request, payload: CreateOrderRequest, current_user: di
         raise HTTPException(status_code=409, detail="Not enough seats available")
 
     amount_inr = float(ticket_row["price_inr"]) * payload.seats
-    amount_paise = int(round(amount_inr * 100))  # Razorpay expects the smallest currency unit
+    discount_amount = 0
+    coupon_id = None
+
+    if payload.coupon_code:
+        coupon_res = supabase_admin.table("coupons").select("*").eq("code", payload.coupon_code.upper()).execute()
+        if not coupon_res.data:
+            raise HTTPException(status_code=400, detail="Invalid coupon code")
+        coupon = coupon_res.data[0]
+        
+        if not coupon.get("is_active") or coupon.get("current_uses", 0) >= coupon.get("max_uses", 1):
+            raise HTTPException(status_code=400, detail="Coupon is not valid or max uses reached")
+        
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        if coupon.get("valid_from") and now < datetime.fromisoformat(coupon["valid_from"]):
+            raise HTTPException(status_code=400, detail="Coupon not yet valid")
+        if coupon.get("valid_until") and now > datetime.fromisoformat(coupon["valid_until"]):
+            raise HTTPException(status_code=400, detail="Coupon expired")
+        if coupon.get("event_id") and coupon["event_id"] != payload.event_id:
+            raise HTTPException(status_code=400, detail="Coupon not valid for this event")
+            
+        if coupon["discount_type"] == "percentage":
+            discount_amount = int(round(amount_inr * float(coupon["discount_value"]) / 100))
+        elif coupon["discount_type"] == "fixed":
+            discount_amount = int(round(float(coupon["discount_value"])))
+            
+        coupon_id = coupon["id"]
+
+    final_amount_inr = amount_inr - discount_amount
+    if final_amount_inr < 1:
+        discount_amount = amount_inr - 1
+        final_amount_inr = 1
+
+    amount_paise = int(round(final_amount_inr * 100))  # Razorpay expects the smallest currency unit
 
     booking_id = f"BK{int(time.time() * 1000)}"
 
@@ -108,9 +142,16 @@ def create_order(request: Request, payload: CreateOrderRequest, current_user: di
         raise HTTPException(status_code=409, detail=f"Could not secure seats: {str(e)}")
 
     # 4. Attach the Razorpay order ID to the successfully created booking
-    supabase_admin.table("bookings").update(
-        {"razorpay_order_id": razorpay_order["id"]}
-    ).eq("booking_id", booking_id).execute()
+    update_data = {"razorpay_order_id": razorpay_order["id"]}
+    if coupon_id:
+        update_data["coupon_id"] = coupon_id
+        update_data["discount_amount"] = discount_amount
+        update_data["total_amount"] = final_amount_inr
+    else:
+        update_data["discount_amount"] = 0
+        update_data["total_amount"] = amount_inr
+
+    supabase_admin.table("bookings").update(update_data).eq("booking_id", booking_id).execute()
 
     return {
         "booking_id": booking_id,
@@ -178,6 +219,7 @@ def release_seats(payload: ReleaseSeatsRequest, current_user: dict = Depends(get
 class CreateSeatOrderRequest(BaseModel):
     event_id: str
     seat_ids: list[int] = Field(..., min_length=1, max_length=20)
+    coupon_code: str | None = None
 
 
 @router.post("/create-order-seats")
@@ -201,7 +243,45 @@ def create_order_seats(request: Request, payload: CreateSeatOrderRequest, curren
     if not data.get("success"):
         raise HTTPException(status_code=409, detail=data.get("message", "Could not complete booking"))
 
-    amount_paise = int(round(float(data["total_price"]) * 100))
+    amount_inr = float(data["total_price"])
+    discount_amount = 0
+    coupon_id = None
+
+    if payload.coupon_code:
+        coupon_res = supabase_admin.table("coupons").select("*").eq("code", payload.coupon_code.upper()).execute()
+        if not coupon_res.data:
+            # We already booked seats in DB, we should cancel booking before throwing
+            supabase_admin.table("bookings").update({"status": "Cancelled", "payment_status": "Cancelled"}).eq("booking_id", data["booking_id"]).execute()
+            raise HTTPException(status_code=400, detail="Invalid coupon code")
+        coupon = coupon_res.data[0]
+        
+        if not coupon.get("is_active") or coupon.get("current_uses", 0) >= coupon.get("max_uses", 1):
+            supabase_admin.table("bookings").update({"status": "Cancelled", "payment_status": "Cancelled"}).eq("booking_id", data["booking_id"]).execute()
+            raise HTTPException(status_code=400, detail="Coupon is not valid or max uses reached")
+        
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        if (coupon.get("valid_from") and now < datetime.fromisoformat(coupon["valid_from"])) or (coupon.get("valid_until") and now > datetime.fromisoformat(coupon["valid_until"])):
+            supabase_admin.table("bookings").update({"status": "Cancelled", "payment_status": "Cancelled"}).eq("booking_id", data["booking_id"]).execute()
+            raise HTTPException(status_code=400, detail="Coupon not valid at this time")
+            
+        if coupon.get("event_id") and coupon["event_id"] != payload.event_id:
+            supabase_admin.table("bookings").update({"status": "Cancelled", "payment_status": "Cancelled"}).eq("booking_id", data["booking_id"]).execute()
+            raise HTTPException(status_code=400, detail="Coupon not valid for this event")
+            
+        if coupon["discount_type"] == "percentage":
+            discount_amount = int(round(amount_inr * float(coupon["discount_value"]) / 100))
+        elif coupon["discount_type"] == "fixed":
+            discount_amount = int(round(float(coupon["discount_value"])))
+            
+        coupon_id = coupon["id"]
+
+    final_amount_inr = amount_inr - discount_amount
+    if final_amount_inr < 1:
+        discount_amount = amount_inr - 1
+        final_amount_inr = 1
+
+    amount_paise = int(round(final_amount_inr * 100))
 
     try:
         razorpay_order = razorpay_client.order.create(
@@ -224,9 +304,16 @@ def create_order_seats(request: Request, payload: CreateSeatOrderRequest, curren
         ).eq("booking_id", data["booking_id"]).execute()
         raise HTTPException(status_code=502, detail=f"Payment gateway error, seats released: {e}")
 
-    supabase_admin.table("bookings").update(
-        {"razorpay_order_id": razorpay_order["id"]}
-    ).eq("booking_id", data["booking_id"]).execute()
+    update_data = {"razorpay_order_id": razorpay_order["id"]}
+    if coupon_id:
+        update_data["coupon_id"] = coupon_id
+        update_data["discount_amount"] = discount_amount
+        update_data["total_amount"] = final_amount_inr
+    else:
+        update_data["discount_amount"] = 0
+        update_data["total_amount"] = amount_inr
+
+    supabase_admin.table("bookings").update(update_data).eq("booking_id", data["booking_id"]).execute()
 
     return {
         "booking_id": data["booking_id"],
@@ -279,14 +366,39 @@ def verify_payment(payload: VerifyPaymentRequest, current_user: dict = Depends(g
     # success immediately so the frontend handler can set confirmedId/paymentId
     # and render the confirmation UI correctly without a second DB round-trip.
     if booking_row["status"] == "Confirmed":
-        ticket_row = _get_ticket_or_404(booking_row["event_id"], booking_row["category"])
-        amount = float(ticket_row["price_inr"]) * booking_row["seats_booked"]
+        amount = booking_row.get("total_amount")
+        if amount is None: # fallback for legacy bookings
+            ticket_row = _get_ticket_or_404(booking_row["event_id"], booking_row["category"])
+            amount = float(ticket_row["price_inr"]) * booking_row["seats_booked"]
+            
         return {
             "message": "Booking confirmed",
             "booking_id": payload.booking_id,
             "payment_id": payload.razorpay_payment_id,
             "amount": amount,
         }
+        
+    # Attempt to consume coupon atomically if one was used
+    if booking_row.get("coupon_id"):
+        try:
+            supabase_admin.rpc(
+                "consume_coupon",
+                {
+                    "p_booking_id": payload.booking_id,
+                    "p_user_id": current_user["user_id"],
+                    "p_coupon_id": booking_row["coupon_id"],
+                },
+            ).execute()
+        except Exception as e:
+            # Coupon consumption failed (e.g., concurrency limit reached)
+            # Refund payment and cancel booking
+            razorpay_client.payment.refund(payload.razorpay_payment_id, {
+                "notes": {"reason": "coupon_exhausted"}
+            })
+            supabase_admin.table("bookings").update(
+                {"status": "Cancelled", "payment_status": "Refunded"}
+            ).eq("booking_id", payload.booking_id).execute()
+            raise HTTPException(status_code=409, detail="Coupon usage limit reached during checkout. Payment refunded.")
 
     supabase_admin.table("bookings").update(
         {
@@ -296,8 +408,10 @@ def verify_payment(payload: VerifyPaymentRequest, current_user: dict = Depends(g
         }
     ).eq("booking_id", payload.booking_id).execute()
 
-    ticket_row = _get_ticket_or_404(booking_row["event_id"], booking_row["category"])
-    amount = float(ticket_row["price_inr"]) * booking_row["seats_booked"]
+    amount = booking_row.get("total_amount")
+    if amount is None:
+        ticket_row = _get_ticket_or_404(booking_row["event_id"], booking_row["category"])
+        amount = float(ticket_row["price_inr"]) * booking_row["seats_booked"]
 
     # Use upsert logic if table has a constraint, or just check existence
     existing_payment = supabase_admin.table("payments").select("*").eq("payment_id", payload.razorpay_payment_id).execute()

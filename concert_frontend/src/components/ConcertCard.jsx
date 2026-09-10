@@ -80,7 +80,10 @@ export default function ConcertCard({ event, wishlisted = false, onWishlistChang
     <div
       className="glass-card glass-card-hover group rounded-2xl overflow-hidden hover:-translate-y-1.5 transition-all duration-300 relative shadow-lg flex flex-col h-full"
     >
-      <Link to={`/concerts/${primary.event_id}`} className="block flex-grow">
+      <div 
+        onClick={() => window.location.href = `/concerts/${primary.event_id}`} 
+        className="block flex-grow cursor-pointer"
+      >
         {/* Poster Wrapper */}
         <div className="h-52 relative overflow-hidden bg-void">
           {event.image_url ? (
@@ -141,12 +144,26 @@ export default function ConcertCard({ event, wishlisted = false, onWishlistChang
         {/* Details Wrapper */}
         <div className="p-5 flex flex-col justify-between flex-grow">
           <div>
-            <h3 className="font-display text-2xl tracking-wide group-hover:text-spot transition-colors duration-300 leading-tight">
-              {event.artist_name}
+            <h3 className="font-display text-2xl tracking-wide group-hover:text-spot transition-colors duration-300 leading-tight relative z-20">
+              <Link 
+                to={`/artists/${event.artist_id}`}
+                onClick={(e) => e.stopPropagation()}
+                className="hover:underline decoration-spot/50 underline-offset-4"
+              >
+                {event.artist_name}
+              </Link>
             </h3>
 
-            <p className="text-xs font-semibold text-haze mt-1.5 flex items-center gap-2 flex-wrap">
-              <span className="flex items-center gap-1">📍 {event.venue_name}, {event.city}</span>
+            <p className="text-xs font-semibold text-haze mt-1.5 flex items-center gap-2 flex-wrap relative z-20">
+              <span className="flex items-center gap-1">📍 
+                <Link 
+                  to={`/venues/${event.venue_id}`}
+                  onClick={(e) => e.stopPropagation()}
+                  className="hover:underline hover:text-spot2 transition-colors"
+                >
+                  {event.venue_name}
+                </Link>, {event.city}
+              </span>
               {distanceKm !== null && (
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-white/[0.04] text-spot2 bg-spot2/5">
                   {distanceKm.toFixed(1)} km away
@@ -155,7 +172,7 @@ export default function ConcertCard({ event, wishlisted = false, onWishlistChang
             </p>
           </div>
 
-          <div className="text-[11px] font-mono text-haze/70 border-t border-white/[0.03] pt-3.5 mt-4 flex items-center justify-between">
+          <div className="text-[11px] font-mono text-haze/70 border-t border-white/[0.03] pt-3.5 mt-4 flex items-center justify-between relative z-20">
             <span>📅 {formatDate(event.event_date)}</span>
             {event.latitude != null && event.longitude != null && (
               <a
@@ -170,7 +187,7 @@ export default function ConcertCard({ event, wishlisted = false, onWishlistChang
             )}
           </div>
         </div>
-      </Link>
+      </div>
 
       {/* Showtime Trigger Links */}
       <div className="px-5 pb-5 pt-1 border-t border-white/[0.02] flex flex-wrap gap-2 mt-auto">

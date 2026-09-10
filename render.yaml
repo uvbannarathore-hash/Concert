@@ -1,0 +1,13 @@
+services:
+  - type: cron
+    name: concert-reminders
+    env: python
+    rootDir: concert_backend
+    buildCommand: pip install -r requirements.txt && pip install --no-deps google-genai==1.23.0
+    startCommand: python send_reminders.py
+    schedule: "0 10 * * *"
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
