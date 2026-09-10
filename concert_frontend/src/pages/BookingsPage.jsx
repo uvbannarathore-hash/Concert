@@ -15,13 +15,32 @@ export default function BookingsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [cancellingId, setCancellingId] = useState('')
+  const [refundingId, setRefundingId] = useState('')
   const [selectedPass, setSelectedPass] = useState(null)
+  const [razorpayKeyId, setRazorpayKeyId] = useState('')
+
+  function loadRazorpayScript() {
+    return new Promise((resolve) => {
+      if (window.Razorpay) {
+        resolve(true)
+        return
+      }
+      const script = document.createElement('script')
+      script.src = 'https://checkout.razorpay.com/v1/checkout.js'
+      script.onload = () => resolve(true)
+      script.onerror = () => resolve(false)
+      document.body.appendChild(script)
+    })
+  }
 
   function load() {
     setLoading(true)
     api
       .myBookings()
-      .then((data) => setBookings(data.bookings || []))
+      .then((data) => {
+        setBookings(data.bookings || [])
+        if (data.razorpay_key_id) setRazorpayKeyId(data.razorpay_key_id)
+      })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false))
   }
@@ -41,6 +60,63 @@ export default function BookingsPage() {
     }
   }
 
+  async function handleRefund(bookingId) {
+    if (!window.confirm("Are you sure you want to refund this booking?")) return
+    setRefundingId(bookingId)
+    try {
+      await api.initiateRefund(bookingId)
+      alert("Refund initiated successfully")
+      load()
+    } catch (err) {
+      alert("Refund failed: " + err.message)
+    } finally {
+      setRefundingId('')
+    }
+  }
+
+  async function handleRetryPayment(booking) {
+    let retryDetails;
+    try {
+      retryDetails = await api.getPaymentRetry(booking.booking_id)
+    } catch (err) {
+      alert("Could not fetch payment details: " + err.message)
+      return
+    }
+
+    const scriptReady = await loadRazorpayScript()
+    if (!scriptReady) {
+      alert("Razorpay SDK failed to load. Check your connection.")
+      return
+    }
+
+    const rzp = new window.Razorpay({
+      key: razorpayKeyId,
+      amount: retryDetails.amount,
+      currency: retryDetails.currency,
+      order_id: retryDetails.razorpay_order_id,
+      name: "Concert Booking Retry",
+      description: `Payment for ${booking.events?.artist_name || 'Event'}`,
+      theme: { color: '#FF3D6E' },
+      handler: async function (response) {
+        try {
+          await api.verifyPayment({
+            booking_id: booking.booking_id,
+            razorpay_order_id: response.razorpay_order_id,
+            razorpay_payment_id: response.razorpay_payment_id,
+            razorpay_signature: response.razorpay_signature,
+          })
+          load()
+        } catch (err) {
+          alert('Payment verification failed: ' + err.message)
+        }
+      },
+    })
+    rzp.on('payment.failed', function (response) {
+      alert(`Payment Failed: ${response.error.description}`)
+    })
+    rzp.open()
+  }
+
   // Format date nicely (e.g. "Dec 20, 2026")
   const formatDate = (dateStr) => {
     try {
@@ -50,6 +126,66 @@ export default function BookingsPage() {
     } catch {
       return dateStr
     }
+  }
+
+  function printReceipt(b) {
+    const eventDetails = b.events || {}
+    const printWindow = window.open('', '_blank', 'width=800,height=600');
+    if (!printWindow) {
+      alert('Please allow popups to download the receipt.');
+      return;
+    }
+    const html = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Receipt - ${b.booking_id}</title>
+          <style>
+            body { font-family: 'Courier New', Courier, monospace; padding: 40px; color: #111; max-width: 600px; margin: 0 auto; line-height: 1.5; }
+            .header { text-align: center; border-bottom: 2px dashed #ccc; padding-bottom: 20px; margin-bottom: 20px; }
+            .title { font-size: 28px; font-weight: bold; margin: 0; letter-spacing: 2px; }
+            .subtitle { font-size: 14px; color: #555; text-transform: uppercase; margin-top: 5px; }
+            .row { display: flex; justify-content: space-between; margin-bottom: 12px; font-size: 15px; }
+            .label { font-weight: bold; color: #333; }
+            .divider { border-bottom: 1px solid #eee; margin: 20px 0; }
+            .footer { text-align: center; margin-top: 40px; font-size: 12px; color: #777; border-top: 2px dashed #ccc; padding-top: 20px; }
+            @media print {
+              body { padding: 0; margin: 20px auto; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h1 class="title">LIVEWIRE</h1>
+            <div class="subtitle">Official Booking Receipt</div>
+          </div>
+          
+          <div class="row"><span class="label">Booking ID:</span> <span>${b.booking_id}</span></div>
+          <div class="row"><span class="label">Event:</span> <span>${eventDetails.artist_name || 'LiveWire Show'}</span></div>
+          <div class="row"><span class="label">Venue:</span> <span>${eventDetails.venue_name || '-'}, ${eventDetails.city || '-'}</span></div>
+          <div class="row"><span class="label">Date:</span> <span>${eventDetails.event_date ? formatDate(eventDetails.event_date) : '-'}</span></div>
+          <div class="row"><span class="label">Time:</span> <span>${eventDetails.event_time || '-'}</span></div>
+          
+          <div class="divider"></div>
+          
+          <div class="row"><span class="label">Category:</span> <span>${(b.category || 'General').toUpperCase()}</span></div>
+          <div class="row"><span class="label">Seats:</span> <span>${b.seats_booked}</span></div>
+          <div class="row"><span class="label">Booking Status:</span> <span>${(b.status || '').toUpperCase()}</span></div>
+          <div class="row"><span class="label">Payment Status:</span> <span>${(b.payment_status || '').toUpperCase()}</span></div>
+          
+          <div class="footer">
+            Generated on ${new Date().toLocaleString()}
+          </div>
+        </body>
+      </html>
+    `;
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => {
+      printWindow.print();
+    }, 250);
   }
 
   return (
@@ -221,16 +357,41 @@ export default function BookingsPage() {
                   </div>
 
                   {isConfirmed && (
+                    <div className="flex flex-col items-center gap-1 w-full text-center mt-2">
+                      <button
+                        onClick={() => printReceipt(b)}
+                        className="text-[11px] text-haze hover:text-paper bg-white/[0.05] hover:bg-white/[0.1] rounded px-2 py-1 font-mono transition w-full"
+                      >
+                        Download Receipt
+                      </button>
+                      <button
+                        onClick={() => handleCancel(b.booking_id)}
+                        disabled={cancellingId === b.booking_id}
+                        className="text-[11px] text-haze/60 hover:text-spot underline underline-offset-4 disabled:opacity-40 font-mono transition mt-1"
+                      >
+                        {cancellingId === b.booking_id ? 'Cancelling…' : 'Cancel Ticket'}
+                      </button>
+                    </div>
+                  )}
+
+                  {b.status === 'Cancelled' && !!b.razorpay_payment_id && b.payment_status !== 'Refunded' && (
                     <button
-                      onClick={() => handleCancel(b.booking_id)}
-                      disabled={cancellingId === b.booking_id}
-                      className="text-[11px] text-haze/60 hover:text-spot underline underline-offset-4 disabled:opacity-40 font-mono transition"
+                      onClick={() => handleRefund(b.booking_id)}
+                      disabled={refundingId === b.booking_id}
+                      className="text-[11px] text-spot hover:text-white bg-spot/20 hover:bg-spot/40 rounded px-2 py-1 font-mono transition w-full mt-2"
                     >
-                      {cancellingId === b.booking_id ? 'Cancelling…' : 'Cancel Ticket'}
+                      {refundingId === b.booking_id ? 'Refunding…' : 'Initiate Refund'}
                     </button>
                   )}
-                  
-                  
+
+                  {b.status === 'Pending' && (
+                    <button
+                      onClick={() => handleRetryPayment(b)}
+                      className="text-[11px] text-go hover:text-white bg-go/20 hover:bg-go/40 rounded px-2 py-1 font-mono transition w-full mt-2"
+                    >
+                      Complete Payment
+                    </button>
+                  )}
                 </div>
 
               </div>

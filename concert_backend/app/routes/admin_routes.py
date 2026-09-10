@@ -102,6 +102,7 @@ class CreateEventRequest(BaseModel):
     event_date: str   # "2026-12-20"
     event_time: str   # "7:00 PM"
     event_type: str = "Concert"  # Concert | Movie | Comedy Show | Music Show | Play | Sports
+    description: str | None = None
     latitude: float | None = None
     longitude: float | None = None
 
@@ -120,6 +121,7 @@ def create_event(payload: CreateEventRequest, admin=Depends(get_current_admin)):
             "event_date": payload.event_date,
             "event_time": payload.event_time,
             "event_type": payload.event_type,
+            "description": payload.description,
             "status": "Upcoming",
             "latitude": payload.latitude,
             "longitude": payload.longitude,

@@ -5,17 +5,25 @@ router = APIRouter(prefix="/concerts", tags=["concerts"])
 
 
 @router.get("")
-def list_concerts(city: str | None = None, event_type: str | None = None):
+def list_concerts(
+    city: str | None = None, 
+    event_type: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None
+):
     """
-    Returns all upcoming events, optionally filtered by city and/or event_type
-    (Concert, Movie, Comedy Show, Music Show, Play, Sports).
+    Returns all upcoming events, optionally filtered by city, event_type, and dates.
     Public endpoint - no login required, just like browsing BookMyShow.
     """
-    query = supabase_admin.table("events").select("*")
+    query = supabase_admin.table("events").select("*, ticket_categories(price_inr)").eq("status", "Upcoming")
     if city:
         query = query.eq("city", city)
     if event_type:
         query = query.eq("event_type", event_type)
+    if date_from:
+        query = query.gte("event_date", date_from)
+    if date_to:
+        query = query.lte("event_date", date_to)
 
     result = query.execute()
     return {"events": result.data}

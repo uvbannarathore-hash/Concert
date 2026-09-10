@@ -390,6 +390,39 @@ async def razorpay_webhook(request: Request):
     return {"status": "ok"}
 
 
+@router.get("/{booking_id}/payment-retry")
+def get_payment_retry(booking_id: str, current_user: dict = Depends(get_current_user)):
+    """Fetches original amount for payment retry flow."""
+    booking = supabase_admin.table("bookings").select("*").eq("booking_id", booking_id).eq("user_id", current_user["user_id"]).execute()
+    if not booking.data:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    b = booking.data[0]
+    if b["status"] != "Pending":
+        raise HTTPException(status_code=400, detail="Only Pending bookings can be retried")
+    ticket = _get_ticket_or_404(b["event_id"], b["category"])
+    amount = int(round(float(ticket["price_inr"]) * b["seats_booked"] * 100))
+    razorpay_order_id = b.get("razorpay_order_id")
+    if not razorpay_order_id:
+        razorpay_order = razorpay_client.order.create(
+            {
+                "amount": amount,
+                "currency": "INR",
+                "receipt": booking_id,
+                "notes": {
+                    "booking_id": booking_id,
+                    "user_id": current_user["user_id"],
+                    "event_id": b["event_id"],
+                },
+            }
+        )
+        razorpay_order_id = razorpay_order["id"]
+        supabase_admin.table("bookings").update(
+            {"razorpay_order_id": razorpay_order_id}
+        ).eq("booking_id", booking_id).execute()
+
+    return {"amount": amount, "currency": "INR", "razorpay_order_id": razorpay_order_id}
+
+
 @router.get("/me")
 def my_bookings(current_user: dict = Depends(get_current_user)):
     """
@@ -401,9 +434,11 @@ def my_bookings(current_user: dict = Depends(get_current_user)):
         supabase_admin.table("bookings")
         .select("*, events(*)")
         .eq("user_id", current_user["user_id"])
+        .order("created_at", desc=True)
         .execute()
     )
-    return {"bookings": result.data}
+    from app.config import RAZORPAY_KEY_ID
+    return {"bookings": result.data, "razorpay_key_id": RAZORPAY_KEY_ID}
 
 
 @router.post("/{booking_id}/cancel")
@@ -458,3 +493,47 @@ def get_booking_pass(booking_id: str):
     user_info = user_result.data[0] if user_result.data else {"name": "Unknown"}
     
     return {"ticket": {**booking_data, "users": user_info}}
+
+
+@router.post("/{booking_id}/refund")
+def initiate_refund(booking_id: str, current_user: dict = Depends(get_current_user)):
+    """
+    Initiates a Razorpay refund for a cancelled booking.
+    """
+    result = (
+        supabase_admin.table("bookings")
+        .select("*")
+        .eq("booking_id", booking_id)
+        .eq("user_id", current_user["user_id"])
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    booking = result.data[0]
+    if booking["status"] != "Cancelled":
+        raise HTTPException(status_code=400, detail="Only Cancelled bookings can be refunded")
+    
+    if booking["payment_status"] == "Refunded":
+        raise HTTPException(status_code=400, detail="Booking is already refunded")
+    
+    if not booking.get("razorpay_payment_id"):
+        raise HTTPException(status_code=400, detail="No successful payment to refund")
+
+    ticket_row = _get_ticket_or_404(booking["event_id"], booking["category"])
+    amount_inr = float(ticket_row["price_inr"]) * booking["seats_booked"]
+    amount_paise = int(round(amount_inr * 100))
+
+    try:
+        razorpay_client.payment.refund(booking["razorpay_payment_id"], {
+            "amount": amount_paise,
+            "notes": {"booking_id": booking_id}
+        })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Refund failed: {str(e)}")
+
+    supabase_admin.table("bookings").update(
+        {"payment_status": "Refunded"}
+    ).eq("booking_id", booking_id).execute()
+
+    return {"message": "Refund initiated successfully"}

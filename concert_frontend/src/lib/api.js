@@ -138,10 +138,12 @@ export const api = {
   isLoggedIn: () => !!getToken(),
   currentEmail: () => localStorage.getItem('email'),
 
-  listConcerts: (city, eventType) => {
+  listConcerts: (city, eventType, dateFrom, dateTo) => {
     const params = new URLSearchParams()
     if (city) params.set('city', city)
     if (eventType) params.set('event_type', eventType)
+    if (dateFrom) params.set('date_from', dateFrom)
+    if (dateTo) params.set('date_to', dateTo)
     const qs = params.toString()
     return request(`/concerts${qs ? `?${qs}` : ''}`)
   },
@@ -169,6 +171,12 @@ export const api = {
 
   cancelBooking: (bookingId) =>
     request(`/bookings/${bookingId}/cancel`, { method: 'POST', auth: true }),
+
+  initiateRefund: (bookingId) =>
+    request(`/bookings/${bookingId}/refund`, { method: 'POST', auth: true }),
+
+  getPaymentRetry: (bookingId) =>
+    request(`/bookings/${bookingId}/payment-retry`, { auth: true }),
 
   myProfile: () => request('/auth/me', { auth: true }),
 

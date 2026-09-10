@@ -37,6 +37,9 @@ export default function HomePage() {
   const [events, setEvents] = useState([])
   const [city, setCity] = useState('')
   const [eventType, setEventType] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [maxPrice, setMaxPrice] = useState(100000)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [profile, setProfile] = useState(null)
@@ -64,11 +67,11 @@ export default function HomePage() {
   useEffect(() => {
     setLoading(true)
     api
-      .listConcerts(city || undefined, eventType || undefined)
+      .listConcerts(city || undefined, eventType || undefined, dateFrom || undefined, dateTo || undefined)
       .then((data) => setEvents(data.events || []))
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false))
-  }, [city, eventType])
+  }, [city, eventType, dateFrom, dateTo])
 
   useEffect(() => {
     if (api.isLoggedIn()) {
@@ -98,7 +101,13 @@ export default function HomePage() {
     (e) => e.event_date >= today && e.status !== 'Cancelled' && e.status !== 'Completed'
   )
 
-  const searchedEvents = activeEvents.filter((e) => {
+  const priceFilteredEvents = activeEvents.filter((e) => {
+    if (!e.ticket_categories || e.ticket_categories.length === 0) return true;
+    const minEventPrice = Math.min(...e.ticket_categories.map(c => Number(c.price_inr)));
+    return minEventPrice <= maxPrice;
+  })
+
+  const searchedEvents = priceFilteredEvents.filter((e) => {
     const term = searchQuery.toLowerCase().trim()
     if (!term) return true
     return (
@@ -281,6 +290,36 @@ export default function HomePage() {
               </button>
             )}
 
+            {/* Filter Controls Row */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+                className="bg-void/50 border border-white/[0.04] text-paper text-xs p-2 rounded-lg"
+              />
+              <span className="text-haze">to</span>
+              <input
+                type="date"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+                className="bg-void/50 border border-white/[0.04] text-paper text-xs p-2 rounded-lg"
+              />
+              
+              <div className="flex flex-col gap-1 ml-0 sm:ml-4 min-w-[150px]">
+                <label className="text-[10px] font-mono text-haze uppercase">Max Price: ₹{maxPrice === 100000 ? 'Any' : maxPrice}</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="20000"
+                  step="500"
+                  value={maxPrice === 100000 ? 20000 : maxPrice}
+                  onChange={(e) => setMaxPrice(Number(e.target.value) === 20000 ? 100000 : Number(e.target.value))}
+                  className="accent-spot"
+                />
+              </div>
+            </div>
+
             {/* City Badges */}
             <div className="flex gap-1.5 overflow-x-auto pb-1 sm:pb-0">
               <button
@@ -343,6 +382,9 @@ export default function HomePage() {
               onClick={() => {
                 setCity('')
                 setEventType('')
+                setDateFrom('')
+                setDateTo('')
+                setMaxPrice(100000)
                 setSearchParams({})
               }}
               className="btn-ghost !px-5 !py-2 text-xs mt-6"

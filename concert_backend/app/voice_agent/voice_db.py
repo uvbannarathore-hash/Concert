@@ -80,7 +80,7 @@ def search_events(query: str | None = None, city: str | None = None) -> dict:
         supabase_admin
         .table("events")
         .select(
-            "event_id, artist_name, venue_name, city, event_date, event_type"
+            "event_id, artist_name, venue_name, city, event_date, event_time, event_type"
         )
         .gte("event_date", today)
     )
@@ -105,9 +105,15 @@ def search_events(query: str | None = None, city: str | None = None) -> dict:
             "message": f"No upcoming events found matching '{query or city}'."
         }
 
+    # Same movie/artist can have multiple showtimes at the same venue on
+    # the same date (e.g. a 7pm and a 9pm show) - these are DIFFERENT
+    # event_ids with different seat/pricing data. event_time MUST be
+    # shown here, or a caller asking for a specific showtime (e.g. "the
+    # 9pm show") gives the LLM nothing to match against, and it can
+    # silently pick the wrong one.
     lines = [
         f"{r['artist_name']} at {r['venue_name']}, {r['city']} "
-        f"on {r['event_date']} (event_id: {r['event_id']})"
+        f"on {r['event_date']} at {r.get('event_time', 'time TBA')} (event_id: {r['event_id']})"
         for r in rows
     ]
 
@@ -144,8 +150,16 @@ def get_ticket_categories(event_id: str) -> dict:
 # a booking takes, so callers of book_ticket/book_ticket_for_user never
 # need to know or care which kind of event they're booking.
 # ---------------------------------------------------------------------------
-def _event_has_seat_map(event_id: str) -> bool:
-    result = supabase_admin.table("event_seats").select("id").eq("event_id", event_id).limit(1).execute()
+def _event_has_seat_map(event_id: str, category: str | None = None) -> bool:
+    """Whether this event (or, when given, this specific CATEGORY of it)
+    has a defined seat layout. Category-specific matters because a
+    single event can be a mix - e.g. Gold has a seat map but Silver
+    doesn't - and treating the whole event as seat-mapped just because
+    one category is would silently misroute bookings for the others."""
+    query = supabase_admin.table("event_seats").select("id").eq("event_id", event_id)
+    if category:
+        query = query.eq("category", category)
+    result = query.limit(1).execute()
     return bool(result.data)
 
 
@@ -185,10 +199,15 @@ def get_available_seats(event_id: str, category: str | None = None) -> dict:
     }
 
 
-def _resolve_seat_ids(event_id: str, seat_numbers: list[str]) -> list[int] | None:
+def _resolve_seat_ids(event_id: str, category: str, seat_numbers: list[str]) -> list[int] | None:
     """Converts human seat labels like 'N5' or 'n 5' into event_seats.id
-    values. Returns None if any label can't be found (caller-facing
-    functions turn that into a friendly 'seat not found' message)."""
+    values - MUST match the requested category, not just event_id/row/
+    number, or a seat label that happens to exist under a different
+    category (e.g. 'C3' under VIP when the caller asked for Silver)
+    would silently get booked at the wrong category/price with no
+    error. Returns None if any label can't be found in that exact
+    category (caller-facing functions turn that into a friendly 'seat
+    not found' message)."""
     ids = []
     for label in seat_numbers:
         clean = label.strip().upper()
@@ -200,6 +219,7 @@ def _resolve_seat_ids(event_id: str, seat_numbers: list[str]) -> list[int] | Non
             supabase_admin.table("event_seats")
             .select("id")
             .eq("event_id", event_id)
+            .eq("category", category)
             .eq("seat_row", row)
             .eq("seat_number", int(num_str))
             .execute()
@@ -389,14 +409,14 @@ def _route_booking(user_id: str, event_id: str, category: str, seats: int | None
     flow doesn't duplicate it here since seat-map events are always
     admin-curated upcoming shows in practice, but if that assumption ever
     changes, add the same date guard to _create_seat_booking_and_payment_link."""
-    has_seat_map = _event_has_seat_map(event_id)
+    has_seat_map = _event_has_seat_map(event_id, category)
 
     if seat_numbers:
         if not has_seat_map:
-            return {"success": False, "message": "This event doesn't use seat selection - please just say how many tickets you'd like instead."}
-        seat_ids = _resolve_seat_ids(event_id, seat_numbers)
+            return {"success": False, "message": f"The {category} category doesn't use seat selection - please just say how many tickets you'd like instead."}
+        seat_ids = _resolve_seat_ids(event_id, category, seat_numbers)
         if seat_ids is None:
-            return {"success": False, "message": "Could not find one or more of those seats. Please double-check the seat numbers."}
+            return {"success": False, "message": f"Could not find one or more of those seats in the {category} category. Please double-check the seat numbers."}
         return _create_seat_booking_and_payment_link(user_id, event_id, seat_ids, contact_phone, contact_name, source)
 
     if not seats:

@@ -28,6 +28,7 @@ class ShowSubmissionIn(BaseModel):
     event_date: str  # YYYY-MM-DD
     event_time: str  # HH:MM
     event_type: str = "Concert"
+    description: str | None = None
     categories: list[TicketCategoryIn]
     organizer_contact_name: str | None = None
     organizer_contact_phone: str | None = None
@@ -105,6 +106,7 @@ async def submit_show(
                 "event_date": data.event_date,
                 "event_time": data.event_time,
                 "event_type": data.event_type,
+                "description": data.description,
                 "image_url": image_url,
                 "latitude": data.latitude,
                 "longitude": data.longitude,

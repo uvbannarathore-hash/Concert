@@ -427,10 +427,27 @@ export default function ConcertDetailPage() {
 
           <div className="border-t border-white/[0.04] pt-6">
             <h3 className="font-display text-lg tracking-wider text-paper uppercase mb-3">About this event</h3>
-            <p className="text-sm text-haze leading-relaxed">
-              Experience the energy live. Ensure you arrive at least 30 minutes early. Food, beverage, and mockups will be available. Pass is digital-only and subject to strict verification on site.
+            <p className="text-sm text-haze leading-relaxed whitespace-pre-line">
+              {event.description || 'Experience the energy live. Ensure you arrive at least 30 minutes early. Food, beverage, and mockups will be available. Pass is digital-only and subject to strict verification on site.'}
             </p>
           </div>
+
+          {event.latitude != null && event.longitude != null && (
+            <div className="border-t border-white/[0.04] pt-6">
+              <h3 className="font-display text-lg tracking-wider text-paper uppercase mb-3">Location</h3>
+              <div className="w-full h-48 rounded-xl overflow-hidden border border-white/[0.04] bg-stage2/20">
+                <iframe
+                  width="100%"
+                  height="100%"
+                  style={{ border: 0 }}
+                  loading="lazy"
+                  allowFullScreen
+                  referrerPolicy="no-referrer-when-downgrade"
+                  src={`https://maps.google.com/maps?q=${event.latitude},${event.longitude}&z=15&output=embed`}
+                ></iframe>
+              </div>
+            </div>
+          )}
 
           {/* --- Interactive Seat Map (only for events with a defined layout) --- */}
           {hasSeatMap && (

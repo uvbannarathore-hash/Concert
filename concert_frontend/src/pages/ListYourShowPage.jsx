@@ -12,6 +12,7 @@ const emptyForm = {
   event_date: '',
   event_time: '',
   event_type: 'Concert',
+  description: '',
   organizer_contact_name: '',
   organizer_contact_phone: '',
   organizer_notes: '',
@@ -232,6 +233,17 @@ export default function ListYourShowPage() {
               className="w-full bg-void border border-white/[0.06] rounded-lg px-3 py-2 text-sm text-paper focus:outline-none focus:border-spot/40"
             />
           </div>
+        </div>
+
+        <div>
+          <label className="text-[10px] uppercase tracking-wider text-haze/60 block mb-1">Description (Optional)</label>
+          <textarea
+            value={form.description}
+            onChange={(e) => updateField('description', e.target.value)}
+            className="w-full bg-void border border-white/[0.06] rounded-lg px-3 py-2 text-sm text-paper focus:outline-none focus:border-spot/40"
+            rows="3"
+            placeholder="Tell us about the event, what to expect, etc."
+          />
         </div>
 
         <div>
