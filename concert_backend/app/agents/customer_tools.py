@@ -48,8 +48,13 @@ def get_ticket_categories(event_id: str) -> dict:
     return voice_db.get_ticket_categories(event_id)
 
 
-def book_ticket_transaction(user_id: str, event_id: str, category: str, seats: int, source: str = "website") -> dict:
-    return voice_db.book_ticket_for_user(user_id, event_id, category, seats, source=source)
+def get_available_seats(event_id: str, category: str = None) -> dict:
+    return voice_db.get_available_seats(event_id, category)
+
+
+def book_ticket_transaction(user_id: str, event_id: str, category: str, seats: int = None,
+                             seat_numbers: list = None, source: str = "website") -> dict:
+    return voice_db.book_ticket_for_user(user_id, event_id, category, seats=seats, seat_numbers=seat_numbers, source=source)
 
 
 def get_user_booking_history(user_id: str) -> dict:
@@ -107,6 +112,24 @@ FUNCTION_DECLARATIONS = [
         },
     },
     {
+        "name": "get_available_seats",
+        "description": "Use this AFTER get_ticket_categories, before booking, for events that use "
+        "seat selection (an interactive seat map, like a cinema or stadium). Returns exactly which "
+        "seats (row + number) are currently open in a category, e.g. 'Row N: 1, 2, 5, 8'. If the "
+        "result says has_seat_map is false, this event does NOT use seat selection - just ask how "
+        "many tickets the user wants instead of asking for seat numbers. Call this whenever the "
+        "user wants to see or choose specific seats, or before confirming a booking so you can "
+        "mention what's actually available.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string", "description": "The event_id to check seats for."},
+                "category": {"type": "string", "description": "Optional - limit results to one ticket category."},
+            },
+            "required": ["event_id"],
+        },
+    },
+    {
         "name": "book_ticket_transaction",
         "description": "Starts the ticket booking process. NEVER use this before the user "
         "explicitly confirms the booking (e.g. 'Yes, proceed', 'Confirm', 'Book it'). NEVER call "
@@ -115,15 +138,25 @@ FUNCTION_DECLARATIONS = [
         "booking as Pending Payment, and returns a Razorpay payment link. This does NOT instantly "
         "confirm the booking - you must send the payment_link to the user and clearly tell them "
         "the booking is reserved but only confirmed once they complete payment. NEVER claim a "
-        "booking is confirmed - only that it's reserved pending payment.",
+        "booking is confirmed - only that it's reserved pending payment.\n\n"
+        "SEATS: for events where get_available_seats returned has_seat_map=true, ask the user "
+        "which specific seats they want (e.g. 'N5, N6') and pass them as seat_numbers - or if they "
+        "say 'any 2 seats' / don't care which, pass seats as a plain count instead and the system "
+        "will auto-pick available ones. For events where has_seat_map=false (or you haven't checked "
+        "seats at all), just pass seats as a count - never pass seat_numbers for those events.",
         "parameters": {
             "type": "object",
             "properties": {
                 "event_id": {"type": "string", "description": "The event_id of the concert being booked."},
                 "category": {"type": "string", "description": "The ticket category, must match get_ticket_categories exactly."},
-                "seats": {"type": "integer", "description": "Number of seats to book."},
+                "seats": {"type": "integer", "description": "Number of seats to book - use this OR seat_numbers, not both. Required if not using seat_numbers."},
+                "seat_numbers": {
+                    "type": "array",
+                    "description": "Specific seats the user chose, e.g. ['N5', 'N6'] - only for events with has_seat_map=true. Use this OR seats, not both.",
+                    "items": {"type": "string"},
+                },
             },
-            "required": ["event_id", "category", "seats"],
+            "required": ["event_id", "category"],
         },
     },
     {
@@ -173,6 +206,7 @@ FUNCTION_DECLARATIONS = [
 TOOL_HANDLERS = {
     "search_events": search_events,
     "get_ticket_categories": get_ticket_categories,
+    "get_available_seats": get_available_seats,
     "book_ticket_transaction": book_ticket_transaction,
     "get_user_booking_history": get_user_booking_history,
     "cancel_booking": cancel_booking,

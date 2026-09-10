@@ -38,3 +38,23 @@ def get_concert_detail(event_id: str):
     )
 
     return {"event": event.data[0], "ticket_categories": tickets.data}
+
+
+@router.get("/{event_id}/seats")
+def get_event_seat_map(event_id: str):
+    """
+    Returns the full seat map for an event, grouped by row, for the
+    interactive BookMyShow/PVR-style seat picker. If an event has no
+    event_seats rows (admin hasn't built a seat layout for it), this
+    returns an empty list - the frontend should fall back to the plain
+    quantity-based booking flow in that case, not show an empty seat map.
+    """
+    seats = (
+        supabase_admin.table("event_seats")
+        .select("id, category, seat_row, seat_number, status")
+        .eq("event_id", event_id)
+        .order("seat_row")
+        .order("seat_number")
+        .execute()
+    )
+    return {"seats": seats.data, "has_seat_map": len(seats.data) > 0}

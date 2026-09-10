@@ -48,6 +48,11 @@ Use for: upcoming concerts, concert dates, event locations, event status, ticket
 Examples: "Show me Arijit Singh concerts", "Are there any upcoming Arijit Singh concerts?", "Which concerts are available in Mumbai?", "How much are tickets?"
 For any event, concert, date, availability, ticket, pricing, or schedule question, you MUST use these tools.
 
+IMPORTANT - multiple showtimes: the same movie/artist can appear MORE THAN ONCE in search_events results at the exact same venue and date, differing only by event_time (e.g. a 7pm show and a separate 9pm show) - these are completely different event_ids with their own independent ticket categories, prices, and seat maps. Each search_events result line includes its event_time - read it carefully. If the user names a specific time ("the 9pm show"), you MUST match the event_id whose event_time corresponds to that, not just the first or only one matching the movie/venue/date. If the user hasn't specified a time and more than one showtime exists for what they asked about, ASK which time before calling get_ticket_categories/get_available_seats/book_ticket_transaction - never guess or default to whichever one appears first.
+
+1b. get_available_seats
+Use AFTER get_ticket_categories, before booking, for events with an interactive seat map (has_seat_map=true - a cinema/stadium with named seats like N5). Tells you exactly which seats are open, row by row, so you can ask the user which ones they want instead of just a quantity. If has_seat_map is false, skip this - just ask how many tickets.
+
 2. Artist biography / venue details / policies
 You do NOT currently have a tool for artist background, genre, popular songs, venue facilities/capacity, or general refund/booking policy questions. If asked about these, say honestly that you don't have that information right now and offer to help with event listings, prices, or bookings instead. Never invent artist biography, venue details, or policy details.
 
@@ -59,6 +64,7 @@ ALWAYS use this tool for such questions - never answer from conversation memory.
 Use ONLY when the user explicitly confirms a booking after the assistant has shown the booking summary.
 Examples: "Yes, proceed", "Confirm", "Book it", "Proceed with booking"
 Before calling book_ticket_transaction, you MUST have: event_id, artist/event, date, venue, ticket category, quantity, price.
+For events where get_available_seats returned has_seat_map=true, ask which specific seats the user wants and pass them as seat_numbers (e.g. ["N5", "N6"]) instead of a plain count - or if they say "any 2 seats"/don't care which, pass seats as a count instead and the system auto-picks available ones. For events with has_seat_map=false, always just pass seats as a count.
 NEVER claim that a booking was successful unless book_ticket_transaction actually succeeds.
 After book_ticket_transaction succeeds, provide the booking confirmation and clearly state the booking is reserved/pending until payment is completed via the payment_link - never say it is fully confirmed.
 If book_ticket_transaction fails, clearly tell the user that the booking could not be completed.
@@ -134,20 +140,16 @@ def _build_bound_handlers(user_id: str, chat_id: str | None) -> dict:
     relies on to decide whether to send a Telegram confirmation."""
     source = "telegram" if chat_id else "website"
     return {
-        "search_events": _BASE_HANDLERS_SEARCH,
-        "get_ticket_categories": _BASE_HANDLERS_GET_CATEGORIES,
-        "book_ticket_transaction": lambda event_id, category, seats: _BASE_HANDLERS["book_ticket_transaction"](
-            user_id, event_id, category, seats, source=source
+        "search_events": _BASE_HANDLERS["search_events"],
+        "get_ticket_categories": _BASE_HANDLERS["get_ticket_categories"],
+        "get_available_seats": _BASE_HANDLERS["get_available_seats"],
+        "book_ticket_transaction": lambda event_id, category, seats=None, seat_numbers=None: _BASE_HANDLERS["book_ticket_transaction"](
+            user_id, event_id, category, seats=seats, seat_numbers=seat_numbers, source=source
         ),
         "get_user_booking_history": lambda: _BASE_HANDLERS["get_user_booking_history"](user_id),
         "cancel_booking": lambda booking_id: _BASE_HANDLERS["cancel_booking"](user_id, booking_id),
         "link_telegram_account": lambda email: _BASE_HANDLERS["link_telegram_account"](chat_id, email),
     }
-
-
-# search_events / get_ticket_categories don't need user_id binding - reuse directly.
-_BASE_HANDLERS_SEARCH = _BASE_HANDLERS["search_events"]
-_BASE_HANDLERS_GET_CATEGORIES = _BASE_HANDLERS["get_ticket_categories"]
 
 
 async def _run(effective_user_id: str, session_id: str, name: str, is_admin: bool, message: str, chat_id: str | None) -> str:

@@ -191,6 +191,25 @@ def update_seats(event_id: str, category: str, new_total_seats: int) -> dict:
     return result.data
 
 
+def generate_seat_row(event_id: str, category: str, seat_row: str, seat_count: int, start_number: int = 1) -> dict:
+    """Adds one row of individually-selectable seats to an event's seat map
+    (e.g. row 'N' with 15 seats in the 'Prime' category). Calling this at
+    all for an event turns ON the interactive BookMyShow/PVR-style seat
+    picker for it - events with no rows defined keep using plain
+    quantity-based booking."""
+    result = supabase_admin.rpc(
+        "generate_seat_row",
+        {
+            "p_event_id": event_id,
+            "p_category": category,
+            "p_seat_row": seat_row,
+            "p_seat_count": seat_count,
+            "p_start_number": start_number,
+        },
+    ).execute()
+    return result.data
+
+
 # ---------------------------------------------------------------------------
 # Gemini function declarations (JSON schema) + handler map
 # ---------------------------------------------------------------------------
@@ -384,6 +403,26 @@ FUNCTION_DECLARATIONS = [
             "required": ["event_id", "category", "new_total_seats"],
         },
     },
+    {
+        "name": "generate_seat_row",
+        "description": "Use this ONLY when the admin explicitly wants to set up an interactive "
+        "seat map for an event (individually selectable seats, like a cinema/stadium layout with "
+        "rows and seat numbers) - NOT for regular category-based ticketing, which needs no seat "
+        "map at all. Adds one row at a time - call it once per row the admin describes (e.g. "
+        "'Row P has 11 Recliner seats', then 'Row N has 15 Prime seats each side'). Always confirm "
+        "the exact row letter, seat count, and category with the admin before calling this.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string", "description": "The event ID to add seats to."},
+                "category": {"type": "string", "description": "Which ticket category this row belongs to - must match an existing category for this event."},
+                "seat_row": {"type": "string", "description": "The row letter/label, e.g. 'P', 'N', 'AA'."},
+                "seat_count": {"type": "integer", "description": "How many seats in this row."},
+                "start_number": {"type": "integer", "description": "The first seat number in this row, defaults to 1 if not specified."},
+            },
+            "required": ["event_id", "category", "seat_row", "seat_count"],
+        },
+    },
 ]
 
 TOOL_HANDLERS = {
@@ -397,6 +436,7 @@ TOOL_HANDLERS = {
     "get_user_bookings": get_user_bookings,
     "get_all_users_booking_report": get_all_users_booking_report,
     "get_revenue_report": get_revenue_report,
+    "generate_seat_row": generate_seat_row,
     "get_event_revenue": get_event_revenue,
     "get_refund_list": get_refund_list,
     "update_seats": update_seats,

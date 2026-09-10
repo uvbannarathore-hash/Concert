@@ -46,8 +46,9 @@ async def get_current_user(authorization: str = Header(...)) -> dict:
             user_data = profile_res.data[0]
             is_admin = bool(user_data.get("is_admin", False))
             name = user_data.get("name", "")
-    except Exception:
-        pass
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Failed to fetch profile for user {user_id}: {e}")
 
     return {
         "user_id": user_id,

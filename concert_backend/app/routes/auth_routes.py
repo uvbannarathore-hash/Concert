@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from app.limiter import limiter
 from pydantic import BaseModel, EmailStr, Field
 from app.supabase_client import supabase_anon, supabase_admin
 from app.auth import get_current_user
@@ -12,14 +13,14 @@ class SignupRequest(BaseModel):
     name: str | None = None
     # phone, city, and address are now REQUIRED at signup time
     # (min_length=1 rejects empty strings, not just missing fields)
-    phone: str = Field(..., min_length=1)
+    phone: str = Field(..., pattern=r"^\+?[0-9\s\-]{7,15}$")
     city: str = Field(..., min_length=1)
     address: str = Field(..., min_length=1)
 
 
 class UpdateProfileRequest(BaseModel):
     name: str | None = None
-    phone: str | None = None
+    phone: str | None = Field(default=None, pattern=r"^\+?[0-9\s\-]{7,15}$")
     city: str | None = None
     address: str | None = None
 
@@ -30,7 +31,8 @@ class LoginRequest(BaseModel):
 
 
 @router.post("/signup")
-def signup(payload: SignupRequest):
+@limiter.limit("5/minute")
+def signup(request: Request, payload: SignupRequest):
     """
     Creates a new user via Supabase Auth.
     Supabase generates a unique user_id (UUID) for this user -
@@ -114,7 +116,7 @@ def update_my_profile(payload: UpdateProfileRequest, current_user: dict = Depend
     Only fields actually provided (non-None) are updated - others are
     left untouched.
     """
-    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    updates = {k: v for k, v in payload.model_dump().items() if v is not None and v != ""}
     if not updates:
         raise HTTPException(status_code=400, detail="No fields provided to update")
 
@@ -123,7 +125,8 @@ def update_my_profile(payload: UpdateProfileRequest, current_user: dict = Depend
 
 
 @router.post("/login")
-def login(payload: LoginRequest):
+@limiter.limit("5/minute")
+def login(request: Request, payload: LoginRequest):
     """
     Logs in an existing user and returns a Supabase access token.
     The frontend stores this token and sends it as:

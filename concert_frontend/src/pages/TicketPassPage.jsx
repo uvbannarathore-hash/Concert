@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { QRCodeSVG } from 'qrcode.react'
 import { api, getPublicPassUrl } from '../lib/api'
-import { supabase } from '../lib/supabaseClient'
 
 export default function TicketPassPage() {
   const { bookingId } = useParams()
@@ -16,36 +15,18 @@ export default function TicketPassPage() {
     setLoading(true)
     setError('')
 
-    // 1. Try backend API endpoint first
     api.getTicketPass(bookingId)
       .then((data) => {
         if (data?.ticket) {
           setTicket(data.ticket)
-          setLoading(false)
         } else {
-          throw new Error('Not found')
+          setError('Ticket pass not found or invalid QR code.')
         }
       })
-      .catch(async () => {
-        // 2. Direct Supabase fallback: ensures mobile phones scanning QR codes in local dev or deployed cross-networks always load successfully
-        try {
-          const { data, error: sbErr } = await supabase
-            .from('bookings')
-            .select('booking_id, event_id, category, seats_booked, status, created_at, events(*)')
-            .eq('booking_id', bookingId)
-            .maybeSingle()
-
-          if (sbErr || !data) {
-            setError('Ticket pass not found or invalid QR code.')
-          } else {
-            setTicket(data)
-          }
-        } catch (e) {
-          setError('Unable to authenticate digital ticket pass.')
-        } finally {
-          setLoading(false)
-        }
+      .catch((err) => {
+        setError(err.message || 'Unable to load digital ticket pass. Please check the QR code and try again.')
       })
+      .finally(() => setLoading(false))
   }, [bookingId])
 
   const eventDetails = ticket?.events || {}
@@ -113,7 +94,7 @@ export default function TicketPassPage() {
 
   if (loading) {
     return (
-      <div className="min-h-[80vh] flex flex-col items-center justify-center p-6">
+      <div className="min-h-screen bg-void flex flex-col items-center justify-center p-6">
         <div className="w-12 h-12 border-4 border-spot border-t-transparent rounded-full animate-spin mb-4" />
         <p className="font-mono text-sm text-haze uppercase tracking-widest">Verifying Digital Ticket Pass…</p>
       </div>
@@ -122,17 +103,19 @@ export default function TicketPassPage() {
 
   if (error || !ticket) {
     return (
-      <div className="max-w-md mx-auto my-16 p-8 glass-card bg-stage/40 rounded-3xl border border-spot/30 text-center space-y-4">
-        <div className="w-16 h-16 rounded-full bg-spot/10 border border-spot/30 text-spot font-bold text-2xl flex items-center justify-center mx-auto">
-          ✕
+      <div className="min-h-screen bg-void flex items-center justify-center px-4">
+        <div className="max-w-md w-full p-8 bg-stage/40 rounded-3xl border border-spot/30 text-center space-y-4">
+          <div className="w-16 h-16 rounded-full bg-spot/10 border border-spot/30 text-spot font-bold text-2xl flex items-center justify-center mx-auto">
+            ✕
+          </div>
+          <h2 className="font-display text-2xl text-paper uppercase tracking-wider">Invalid Ticket Pass</h2>
+          <p className="text-xs text-haze leading-relaxed font-mono">
+            {error || 'This booking pass could not be authenticated. Please verify the booking ID or contact support.'}
+          </p>
+          <Link to="/" className="inline-block btn-spot !py-2 !px-6 text-xs font-bold uppercase mt-2">
+            Back to Shows
+          </Link>
         </div>
-        <h2 className="font-display text-2xl text-paper uppercase tracking-wider">Invalid Ticket Pass</h2>
-        <p className="text-xs text-haze leading-relaxed font-mono">
-          {error || 'This booking pass could not be authenticated. Please verify the booking ID or contact support.'}
-        </p>
-        <Link to="/" className="inline-block btn-spot !py-2 !px-6 text-xs font-bold uppercase mt-2">
-          Back to Shows
-        </Link>
       </div>
     )
   }
@@ -140,6 +123,7 @@ export default function TicketPassPage() {
   const isConfirmed = ticket.status === 'Confirmed'
 
   return (
+    <div className="min-h-screen bg-void">
     <div className="max-w-xl mx-auto px-4 py-8 sm:py-12 animate-fade-in-up">
       
       {/* Top Header branding */}
@@ -335,6 +319,7 @@ export default function TicketPassPage() {
         </Link>
       </div>
 
+    </div>
     </div>
   )
 }

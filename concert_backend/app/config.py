@@ -30,3 +30,12 @@ if not SUPABASE_URL or not SUPABASE_ANON_KEY:
     raise RuntimeError(
         "SUPABASE_URL and SUPABASE_ANON_KEY must be set in your .env file"
     )
+
+for key, val in [
+    ("RAZORPAY_KEY_ID", RAZORPAY_KEY_ID),
+    ("RAZORPAY_KEY_SECRET", RAZORPAY_KEY_SECRET),
+    ("RAZORPAY_WEBHOOK_SECRET", RAZORPAY_WEBHOOK_SECRET),
+    ("GEMINI_API_KEY", GEMINI_API_KEY),
+]:
+    if not val:
+        raise RuntimeError(f"{key} must be set in your .env file")

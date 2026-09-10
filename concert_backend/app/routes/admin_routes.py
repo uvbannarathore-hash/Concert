@@ -1,4 +1,5 @@
 import time
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from app.admin_auth import get_current_admin
@@ -107,7 +108,7 @@ class CreateEventRequest(BaseModel):
 
 @router.post("/events")
 def create_event(payload: CreateEventRequest, admin=Depends(get_current_admin)):
-    event_id = f"EVT{int(time.time())}"
+    event_id = f"EVT{uuid.uuid4().hex[:12]}"
     supabase_admin.table("events").insert(
         {
             "event_id": event_id,
@@ -232,9 +233,9 @@ def approve_show_submission(submission_id: int, admin=Depends(get_current_admin)
     if row["status"] != "Pending":
         raise HTTPException(status_code=400, detail=f"Submission is already {row['status']}, not Pending")
 
-    event_id = f"EVT{int(time.time())}"
-    artist_id = f"ART{int(time.time())}"
-    venue_id = f"VEN{int(time.time())}"
+    event_id = f"EVT{uuid.uuid4().hex[:12]}"
+    artist_id = f"ART{uuid.uuid4().hex[:12]}"
+    venue_id = f"VEN{uuid.uuid4().hex[:12]}"
 
     rpc_result = supabase_admin.rpc(
         "create_event_with_pricing",
@@ -293,3 +294,68 @@ def reject_show_submission(submission_id: int, payload: RejectSubmissionRequest,
     if not result.data:
         raise HTTPException(status_code=404, detail="Pending submission not found")
     return {"message": "Submission rejected"}
+
+
+# ---------- Seat layout builder ----------
+# Lets an admin define the physical seat map for an event, one row at a
+# time (matching the PVR/BookMyShow reference UI: row P = Recliner,
+# rows N/M/L = Prime, etc.). Calling this for an event is what turns ON
+# the interactive seat-map booking experience for it - events with zero
+# event_seats rows keep using the plain quantity-based booking flow.
+
+class SeatRowRequest(BaseModel):
+    event_id: str
+    category: str
+    seat_row: str
+    seat_count: int
+    start_number: int = 1
+
+
+@router.post("/seat-layout/add-row")
+def add_seat_row(payload: SeatRowRequest, admin=Depends(get_current_admin)):
+    result = supabase_admin.rpc(
+        "generate_seat_row",
+        {
+            "p_event_id": payload.event_id,
+            "p_category": payload.category,
+            "p_seat_row": payload.seat_row,
+            "p_seat_count": payload.seat_count,
+            "p_start_number": payload.start_number,
+        },
+    ).execute()
+    return result.data
+
+
+@router.get("/seat-layout/{event_id}")
+def get_seat_layout(event_id: str, admin=Depends(get_current_admin)):
+    """Returns the current seat layout for an event, row by row, so the
+    admin can see what's already been defined before adding more rows."""
+    result = (
+        supabase_admin.table("event_seats")
+        .select("id, category, seat_row, seat_number, status")
+        .eq("event_id", event_id)
+        .order("seat_row")
+        .order("seat_number")
+        .execute()
+    )
+    return {"seats": result.data}
+
+
+@router.delete("/seat-layout/{event_id}/row/{seat_row}")
+def delete_seat_row(event_id: str, seat_row: str, admin=Depends(get_current_admin)):
+    """Removes an entire row (e.g. to fix a mistake before any seats in
+    it are booked). Fails safe - refuses if any seat in the row is
+    already Booked, to never silently delete a real booking's seat."""
+    booked_check = (
+        supabase_admin.table("event_seats")
+        .select("id")
+        .eq("event_id", event_id)
+        .eq("seat_row", seat_row)
+        .eq("status", "Booked")
+        .execute()
+    )
+    if booked_check.data:
+        raise HTTPException(status_code=400, detail="Cannot delete a row that has booked seats")
+
+    supabase_admin.table("event_seats").delete().eq("event_id", event_id).eq("seat_row", seat_row).execute()
+    return {"status": "deleted", "seat_row": seat_row}

@@ -22,6 +22,12 @@ export default function AdminPage() {
   const [submissionFilter, setSubmissionFilter] = useState('Pending')
   const [processingSubmissionId, setProcessingSubmissionId] = useState(null)
 
+  // Seat layout builder
+  const [seatEventId, setSeatEventId] = useState('')
+  const [seatRowForm, setSeatRowForm] = useState({ category: '', seat_row: '', seat_count: '', start_number: '1' })
+  const [seatLayout, setSeatLayout] = useState([])
+  const [seatLayoutLoading, setSeatLayoutLoading] = useState(false)
+
   const [showPastEvents, setShowPastEvents] = useState(false)
   const [pastEvents, setPastEvents] = useState([])
   const [pastEventsLoading, setPastEventsLoading] = useState(false)
@@ -193,9 +199,21 @@ export default function AdminPage() {
   async function handleApproveSubmission(id) {
     setProcessingSubmissionId(id)
     try {
-      await adminApi.approveShowSubmission(id)
+      const res = await adminApi.approveShowSubmission(id)
       setMsg('Show approved and published.')
       loadSubmissions()
+
+      // Seat-map setup is a separate, easy-to-forget step (see Seat
+      // Layout tab) - offer to jump straight there with the new
+      // event's ID pre-filled, instead of relying on the admin to
+      // remember to come back for it later.
+      if (res?.event_id && window.confirm(
+        `Event ${res.event_id} is live. Set up an interactive seat map for it now? (Choose "Cancel" to keep the plain quantity-based booking flow instead.)`
+      )) {
+        setSeatEventId(res.event_id)
+        setTab('seatmap')
+        setSeatLayout([]) // brand new event - nothing to load yet, skip the round trip
+      }
     } catch (err) {
       setError(err.message)
     } finally {
@@ -215,6 +233,46 @@ export default function AdminPage() {
       setError(err.message)
     } finally {
       setProcessingSubmissionId(null)
+    }
+  }
+
+  function loadSeatLayout() {
+    if (!seatEventId.trim()) return
+    setSeatLayoutLoading(true)
+    adminApi
+      .getSeatLayout(seatEventId.trim())
+      .then((data) => setSeatLayout(data.seats || []))
+      .catch((err) => setError(err.message))
+      .finally(() => setSeatLayoutLoading(false))
+  }
+
+  async function handleAddSeatRow(e) {
+    e.preventDefault()
+    setError('')
+    try {
+      await adminApi.addSeatRow({
+        event_id: seatEventId.trim(),
+        category: seatRowForm.category.trim(),
+        seat_row: seatRowForm.seat_row.trim().toUpperCase(),
+        seat_count: parseInt(seatRowForm.seat_count, 10),
+        start_number: parseInt(seatRowForm.start_number || '1', 10),
+      })
+      setMsg(`Row ${seatRowForm.seat_row.toUpperCase()} added.`)
+      setSeatRowForm({ category: '', seat_row: '', seat_count: '', start_number: '1' })
+      loadSeatLayout()
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  async function handleDeleteSeatRow(row) {
+    if (!window.confirm(`Delete all seats in row ${row}? This cannot be undone.`)) return
+    try {
+      await adminApi.deleteSeatRow(seatEventId.trim(), row)
+      setMsg(`Row ${row} deleted.`)
+      loadSeatLayout()
+    } catch (err) {
+      setError(err.message)
     }
   }
 
@@ -254,6 +312,7 @@ export default function AdminPage() {
             { id: 'pricing', label: '🎟️ Ticket Rates', icon: '🏷️' },
             { id: 'bookings', label: '📋 Bookings List', icon: '🧾' },
             { id: 'submissions', label: '📬 Show Submissions', icon: '✅' },
+            { id: 'seatmap', label: '💺 Seat Layout', icon: '🗺️' },
           ].map((item) => (
             <button
               key={item.id}
@@ -628,6 +687,110 @@ export default function AdminPage() {
                   )
                 })}
               </div>
+            </div>
+          )}
+
+          {/* 6. Seat Layout Builder Panel */}
+          {tab === 'seatmap' && (
+            <div className="space-y-6">
+              <h2 className="font-display text-xl text-paper uppercase tracking-wider">Seat Layout Builder</h2>
+              <p className="text-xs text-haze -mt-3">
+                Add rows one at a time to enable the interactive seat-map booking experience for an event.
+                Events with no rows defined here keep using the plain quantity-based booking flow.
+              </p>
+
+              <div className="flex gap-2 max-w-md">
+                <input
+                  value={seatEventId}
+                  onChange={(e) => setSeatEventId(e.target.value)}
+                  placeholder="Event ID (e.g. EVT1788...)"
+                  className="flex-1 bg-void border border-white/[0.06] rounded-lg px-3 py-2 text-sm text-paper focus:outline-none focus:border-spot/40"
+                />
+                <button onClick={loadSeatLayout} className="text-xs font-mono uppercase px-4 py-2 rounded-lg border border-white/[0.06] text-haze hover:text-paper">
+                  Load
+                </button>
+              </div>
+
+              {seatEventId && (
+                <>
+                  <form onSubmit={handleAddSeatRow} className="bg-stage/20 border border-white/[0.04] rounded-xl p-4 grid grid-cols-2 sm:grid-cols-5 gap-3 items-end">
+                    <div>
+                      <label className="text-[10px] uppercase tracking-wider text-haze/60 block mb-1">Category</label>
+                      <input
+                        required
+                        value={seatRowForm.category}
+                        onChange={(e) => setSeatRowForm((f) => ({ ...f, category: e.target.value }))}
+                        placeholder="Recliner"
+                        className="w-full bg-void border border-white/[0.06] rounded-lg px-2.5 py-1.5 text-sm text-paper"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] uppercase tracking-wider text-haze/60 block mb-1">Row Letter</label>
+                      <input
+                        required
+                        value={seatRowForm.seat_row}
+                        onChange={(e) => setSeatRowForm((f) => ({ ...f, seat_row: e.target.value }))}
+                        placeholder="P"
+                        maxLength={3}
+                        className="w-full bg-void border border-white/[0.06] rounded-lg px-2.5 py-1.5 text-sm text-paper"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] uppercase tracking-wider text-haze/60 block mb-1">Seat Count</label>
+                      <input
+                        required
+                        type="number"
+                        min="1"
+                        value={seatRowForm.seat_count}
+                        onChange={(e) => setSeatRowForm((f) => ({ ...f, seat_count: e.target.value }))}
+                        placeholder="11"
+                        className="w-full bg-void border border-white/[0.06] rounded-lg px-2.5 py-1.5 text-sm text-paper"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] uppercase tracking-wider text-haze/60 block mb-1">Start #</label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={seatRowForm.start_number}
+                        onChange={(e) => setSeatRowForm((f) => ({ ...f, start_number: e.target.value }))}
+                        className="w-full bg-void border border-white/[0.06] rounded-lg px-2.5 py-1.5 text-sm text-paper"
+                      />
+                    </div>
+                    <button type="submit" className="btn-spot text-xs h-[38px]">+ Add Row</button>
+                  </form>
+
+                  <div className="space-y-2">
+                    {seatLayoutLoading && <p className="text-xs font-mono text-haze">Loading…</p>}
+                    {!seatLayoutLoading && seatLayout.length === 0 && (
+                      <p className="text-xs font-mono text-haze">No seat rows defined yet for this event.</p>
+                    )}
+                    {Object.entries(
+                      seatLayout.reduce((acc, s) => {
+                        acc[s.seat_row] = acc[s.seat_row] || { category: s.category, count: 0, statuses: {} }
+                        acc[s.seat_row].count += 1
+                        acc[s.seat_row].statuses[s.status] = (acc[s.seat_row].statuses[s.status] || 0) + 1
+                        return acc
+                      }, {})
+                    ).map(([row, info]) => (
+                      <div key={row} className="flex items-center justify-between bg-white/[0.01] border border-white/[0.04] rounded-lg px-4 py-2.5">
+                        <div className="text-xs font-mono text-paper">
+                          Row <span className="text-spot2 font-bold">{row}</span> — {info.category} — {info.count} seats
+                          <span className="text-haze/50 ml-2">
+                            ({info.statuses.Available || 0} available, {info.statuses.Booked || 0} booked)
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => handleDeleteSeatRow(row)}
+                          className="text-[10px] font-mono uppercase text-spot hover:text-[#ff5c84]"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
           )}
 

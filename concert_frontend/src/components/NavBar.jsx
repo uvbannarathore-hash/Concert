@@ -5,7 +5,7 @@ import { api } from '../lib/api'
 export default function NavBar() {
   const navigate = useNavigate()
   const location = useLocation()
-  const loggedIn = api.isLoggedIn()
+  const [loggedIn, setLoggedIn] = useState(api.isLoggedIn())
   
   const [profile, setProfile] = useState(null)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
@@ -36,7 +36,14 @@ export default function NavBar() {
 
   useEffect(() => {
     setMobileMenuOpen(false)
+    setLoggedIn(api.isLoggedIn())
   }, [location])
+
+  useEffect(() => {
+    const handleStorage = () => setLoggedIn(api.isLoggedIn())
+    window.addEventListener('storage', handleStorage)
+    return () => window.removeEventListener('storage', handleStorage)
+  }, [])
 
   function handleLogout() {
     api.logout()

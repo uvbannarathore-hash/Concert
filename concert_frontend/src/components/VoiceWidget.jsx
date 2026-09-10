@@ -14,7 +14,7 @@ const STATE = {
 export default function VoiceWidget() {
   const location = useLocation()
   const [loggedIn, setLoggedIn] = useState(api.isLoggedIn())
-  const [isAdmin, setIsAdmin] = useState(false)
+  const [isAdmin, setIsAdmin] = useState(null) // null = "not checked yet"
 
   const [isOpen, setIsOpen] = useState(false)
   const [state, setState] = useState(STATE.IDLE)
@@ -60,7 +60,7 @@ export default function VoiceWidget() {
   // too instead of letting them open it and hit an error.
   useEffect(() => {
     if (!loggedIn) {
-      setIsAdmin(false)
+      setIsAdmin(null)
       return
     }
     api.myProfile().then((p) => setIsAdmin(!!p?.is_admin)).catch(() => {})
@@ -84,7 +84,7 @@ export default function VoiceWidget() {
     }
   }, [])
 
-  if (!loggedIn || isAdmin) return null
+  if (!loggedIn || isAdmin !== false) return null
 
   async function startCall() {
     setError('')

@@ -35,7 +35,10 @@ def get_wishlist(current_user: dict = Depends(get_current_user)):
         .execute()
     )
 
-    return {"wishlist": events.data}
+    event_map = {e["event_id"]: e for e in events.data}
+    ordered = [event_map[eid] for eid in event_ids if eid in event_map]
+
+    return {"wishlist": ordered}
 
 
 @router.post("")

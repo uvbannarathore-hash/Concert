@@ -22,22 +22,27 @@ export default function ConcertDetailPage() {
   const { eventId } = useParams()
   const navigate = useNavigate()
 
-  // --- COMPREHENSIVE ADMIN CHECK ---
-  const rawUser = localStorage.getItem('user') || localStorage.getItem('admin') || '{}'
-  let parsedUser = {}
-  try {
-    parsedUser = JSON.parse(rawUser)
-  } catch (e) {
-    parsedUser = {}
-  }
+  // --- Real admin check (matches NavBar/ChatWidget/VoiceWidget) ---
+  // The old check here read localStorage keys ('user', 'admin',
+  // 'admin_token', 'adminToken') and api.getUser?.() - none of which
+  // are ever actually set by api.js's login/setSession (only
+  // access_token/user_id/email are stored), so it was always false
+  // regardless of real admin status. That let an admin's own account
+  // sail through the customer booking UI with no warning, only to be
+  // rejected server-side (403) once they hit Pay - confusing, and it
+  // also meant the seat map/price never accounted for admin-only
+  // restrictions client-side. isAdmin now starts as null ("not
+  // checked yet") so the Pay button/seat map stay disabled until we
+  // have a real answer, instead of flashing "allowed" first.
+  const [isAdmin, setIsAdmin] = useState(null)
 
-  const hasAdminToken = Boolean(localStorage.getItem('admin_token') || localStorage.getItem('adminToken'))
-  const isAdmin = Boolean(
-    parsedUser?.is_admin === true ||
-    parsedUser?.is_admin === 'true' ||
-    hasAdminToken ||
-    api.getUser?.()?.is_admin === true
-  )
+  useEffect(() => {
+    if (!api.isLoggedIn()) {
+      setIsAdmin(false)
+      return
+    }
+    api.myProfile().then((p) => setIsAdmin(!!p?.is_admin)).catch(() => setIsAdmin(false))
+  }, [])
 
   const [event, setEvent] = useState(null)
   const [tickets, setTickets] = useState([])
@@ -49,6 +54,14 @@ export default function ConcertDetailPage() {
   const [showPassModal, setShowPassModal] = useState(false)
   const [paymentId, setPaymentId] = useState('')
 
+  // --- Seat map (interactive picker) state — only used for events where
+  // an admin has built a seat layout (see AdminPage's Seat Layout tab).
+  // Events with no rows defined fall back to the plain quantity picker
+  // below, completely unchanged from before this feature existed.
+  const [seatMap, setSeatMap] = useState(null)     // { seats: [...], has_seat_map }
+  const [selectedSeatIds, setSelectedSeatIds] = useState([])
+  const [selectedSeatCategory, setSelectedSeatCategory] = useState(null)
+
   useEffect(() => {
     api
       .getConcert(eventId)
@@ -57,14 +70,84 @@ export default function ConcertDetailPage() {
         setTickets(data.ticket_categories || [])
       })
       .catch((err) => setError(err.message))
+
+    api
+      .getSeatMap(eventId)
+      .then((data) => setSeatMap(data))
+      .catch(() => setSeatMap({ seats: [], has_seat_map: false }))
   }, [eventId])
 
+  const hasSeatMap = seatMap?.has_seat_map === true
+
+  function refreshSeatMap() {
+    api.getSeatMap(eventId).then((data) => setSeatMap(data)).catch(() => {})
+  }
+
+  function toggleSeat(seat) {
+    if (seat.status !== 'Available') return
+
+    const already = selectedSeatIds.includes(seat.id)
+
+    if (!already && selectedSeatCategory && seat.category !== selectedSeatCategory) {
+      setError(`You can only select seats from one category at a time (currently: ${selectedSeatCategory}). Deselect those first to switch categories.`)
+      return
+    }
+
+    if (!already && selectedSeatIds.length >= 20) {
+      setError('You can select a maximum of 20 seats per booking.')
+      return
+    }
+
+    setError('')
+
+    setSelectedSeatIds((ids) => {
+      if (already) return ids.filter((id) => id !== seat.id)
+      return [...ids, seat.id]
+    })
+
+    if (already) {
+      if (selectedSeatIds.length === 1) setSelectedSeatCategory(null)
+    } else {
+      setSelectedSeatCategory(seat.category)
+    }
+  }
+
+  // Derived from selectedSeatIds + the seat map data, rather than kept as
+  // its own state - see the note in toggleSeat above for why.
+  const selectedSeatLabels = selectedSeatIds
+    .map((id) => {
+      const s = seatMap?.seats?.find((s) => s.id === id)
+      return s ? { id, label: `${s.seat_row}${s.seat_number}` } : null
+    })
+    .filter(Boolean)
+
+  // Admins type the category name separately in two different forms (the
+  // Pricing tab, and the Seat Layout Builder's free-text "Category"
+  // field) - a mismatch in case/spacing between them (e.g. "Gold" vs
+  // "GOLD") means the exact-match lookup below would silently find no
+  // price and show ₹0. Match case/whitespace-insensitively so a seat
+  // row's category still finds its price even if it wasn't typed
+  // identically everywhere.
+  function findTicketFor(category) {
+    if (!category) return undefined
+    const needle = category.trim().toLowerCase()
+    return tickets.find((t) => (t.category || '').trim().toLowerCase() === needle)
+  }
+
+  const seatCategoryPrice = hasSeatMap && selectedSeatCategory
+    ? findTicketFor(selectedSeatCategory)?.price_inr || 0
+    : 0
+
   async function handlePay() {
-    if (!api.isLoggedIn() && !hasAdminToken) {
+    if (!api.isLoggedIn()) {
       navigate('/login')
       return
     }
-    if (isAdmin) {
+    if (isAdmin !== false) {
+      // Covers both isAdmin === true (real admin) and isAdmin === null
+      // (profile check hasn't resolved yet) - never let a booking
+      // through until we've positively confirmed the user isn't an
+      // admin, matching what the server enforces anyway.
       setError('Admin accounts cannot book tickets. Please use a regular customer account.')
       return
     }
@@ -81,19 +164,34 @@ export default function ConcertDetailPage() {
 
     let order
     try {
-      order = await api.createOrder(eventId, selected.category, seats)
+      if (hasSeatMap) {
+        await api.lockSeats(eventId, selectedSeatIds)
+        order = await api.createOrderSeats(eventId, selectedSeatIds)
+      } else {
+        order = await api.createOrder(eventId, selected.category, seats)
+      }
     } catch (err) {
       setError(err.message)
       setStatus('')
+      if (hasSeatMap) {
+        // Someone likely grabbed one of these seats first — refresh so the
+        // user sees current availability instead of retrying blindly.
+        refreshSeatMap()
+        setSelectedSeatIds([])
+        setSelectedSeatCategory(null)
+      }
       return
     }
+
+    const bookingCategory = hasSeatMap ? selectedSeatCategory : selected.category
+    const bookingSeatCount = hasSeatMap ? selectedSeatIds.length : seats
 
     const rzp = new window.Razorpay({
       key: order.razorpay_key_id,
       amount: order.amount,
       currency: order.currency,
       name: event.artist_name,
-      description: `${seats} × ${selected.category} — ${event.venue_name}`,
+      description: `${bookingSeatCount} × ${bookingCategory} — ${event.venue_name}`,
       order_id: order.razorpay_order_id,
       prefill: {
         email: api.currentEmail?.() || '',
@@ -119,10 +217,14 @@ export default function ConcertDetailPage() {
         ondismiss: async () => {
           setStatus('')
           try {
+            // Cancelling the booking also releases the specific seats back
+            // to Available via trg_restore_specific_seats, same trigger
+            // pattern the plain category flow already relied on.
             await api.cancelBooking(order.booking_id)
           } catch (e) {
             // best-effort cleanup; ignore
           }
+          if (hasSeatMap) refreshSeatMap()
         },
       },
     })
@@ -167,7 +269,10 @@ export default function ConcertDetailPage() {
     )
   }
 
-  const total = selected ? selected.price_inr * seats : 0
+  const total = hasSeatMap ? seatCategoryPrice * selectedSeatIds.length : (selected ? selected.price_inr * seats : 0)
+  const canPay = hasSeatMap ? selectedSeatIds.length > 0 : Boolean(selected)
+  const bookedCategory = hasSeatMap ? selectedSeatCategory : selected?.category
+  const bookedSeatCount = hasSeatMap ? selectedSeatIds.length : seats
 
   // --- Success State UI (Styled physical pass stub) ---
   if (status === 'done') {
@@ -178,7 +283,7 @@ export default function ConcertDetailPage() {
 
         {/* Physical ticket pass representation */}
         <div className="bg-stage rounded-2xl border border-white/[0.04] shadow-2xl overflow-hidden relative">
-          
+
           {/* Top Pass Half */}
           <div className="p-6 relative border-b-2 border-dashed border-void/80 bg-gradient-to-b from-stage2/40 to-stage">
             {/* Cutouts on the sides */}
@@ -194,7 +299,7 @@ export default function ConcertDetailPage() {
 
             <h2 className="font-display text-3xl tracking-wide mt-4 uppercase text-paper leading-tight">{event.artist_name}</h2>
             <p className="text-xs text-haze/80 font-semibold mt-1 flex items-center gap-1">📍 {event.venue_name}, {event.city}</p>
-            
+
             <div className="grid grid-cols-2 gap-4 mt-6 text-left">
               <div>
                 <span className="text-[10px] font-mono text-haze/50 block uppercase">DATE</span>
@@ -210,8 +315,11 @@ export default function ConcertDetailPage() {
           {/* Bottom Stub Half */}
           <div className="p-6 bg-stage/85 flex flex-col items-center">
             <div className="w-full space-y-2 font-mono text-xs text-haze mb-6">
-              <div className="flex justify-between"><span>CATEGORY</span><span className="text-paper font-semibold">{selected.category}</span></div>
-              <div className="flex justify-between"><span>TOTAL SEATS</span><span className="text-paper font-semibold">{seats}</span></div>
+              <div className="flex justify-between"><span>CATEGORY</span><span className="text-paper font-semibold">{bookedCategory}</span></div>
+              {hasSeatMap && selectedSeatLabels.length > 0 && (
+                <div className="flex justify-between"><span>SEATS</span><span className="text-paper font-semibold">{selectedSeatLabels.map((s) => s.label).join(', ')}</span></div>
+              )}
+              <div className="flex justify-between"><span>TOTAL SEATS</span><span className="text-paper font-semibold">{bookedSeatCount}</span></div>
               <div className="flex justify-between"><span>BOOKING ID</span><span className="text-paper font-semibold">{confirmedId}</span></div>
               <div className="flex justify-between"><span>PAYMENT STATUS</span><span className="text-go font-semibold">SUCCESS</span></div>
             </div>
@@ -256,8 +364,8 @@ export default function ConcertDetailPage() {
           onClose={() => setShowPassModal(false)}
           booking={{
             booking_id: confirmedId,
-            category: selected?.category || 'General',
-            seats_booked: seats,
+            category: bookedCategory || 'General',
+            seats_booked: bookedSeatCount,
             status: 'Confirmed',
             event: event,
           }}
@@ -266,11 +374,32 @@ export default function ConcertDetailPage() {
     )
   }
 
+  // Group seat map rows by category then by row letter, for rendering.
+  const seatsByCategory = {}
+  if (hasSeatMap) {
+    for (const s of seatMap.seats) {
+      if (!seatsByCategory[s.category]) seatsByCategory[s.category] = {}
+      if (!seatsByCategory[s.category][s.seat_row]) seatsByCategory[s.category][s.seat_row] = []
+      seatsByCategory[s.category][s.seat_row].push(s)
+    }
+  }
+
+  function seatButtonClasses(seat) {
+    const isSelected = selectedSeatIds.includes(seat.id)
+    if (isSelected)
+      return 'border-green-400 bg-green-400/25 text-green-300 ring-1 ring-green-400/50 scale-105'
+    if (seat.status === 'Booked')
+      return 'border-white/10 bg-white/[0.04] text-white/20 cursor-not-allowed'
+    if (seat.status === 'Locked')
+      return 'border-amber-500/40 bg-amber-500/10 text-amber-400/50 cursor-not-allowed'
+    return 'border-white/30 bg-white/[0.04] text-white/70 hover:border-green-400/60 hover:bg-green-400/10 hover:text-green-300 cursor-pointer'
+  }
+
   // --- Selection State UI (Default layout) ---
   return (
     <div className="max-w-6xl mx-auto px-6 py-12 animate-fade-in-up">
       <div className="grid md:grid-cols-12 gap-8 lg:gap-12">
-        
+
         {/* Left Column: Event details */}
         <div className="md:col-span-7 space-y-6">
           <div className="relative rounded-2xl overflow-hidden shadow-2xl border border-white/[0.04] aspect-[16/10] bg-void">
@@ -302,66 +431,164 @@ export default function ConcertDetailPage() {
               Experience the energy live. Ensure you arrive at least 30 minutes early. Food, beverage, and mockups will be available. Pass is digital-only and subject to strict verification on site.
             </p>
           </div>
+
+          {/* --- Interactive Seat Map (only for events with a defined layout) --- */}
+          {hasSeatMap && (
+            <div className="border-t border-white/[0.04] pt-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-display text-lg tracking-wider text-paper uppercase">Select Your Seats</h3>
+                <button onClick={refreshSeatMap} className="text-[10px] font-mono text-haze hover:text-paper uppercase">🔄 Refresh</button>
+              </div>
+
+              <div className="space-y-6">
+                {Object.entries(seatsByCategory).map(([category, rows]) => {
+                  const price = findTicketFor(category)?.price_inr
+                  return (
+                    <div key={category}>
+                      <p className="text-xs font-mono uppercase tracking-wider text-spot2 mb-2">
+                        ₹{price} {category.toUpperCase()} ROWS
+                      </p>
+                      <div className="space-y-2">
+                        {Object.entries(rows).sort(([a], [b]) => a.localeCompare(b)).map(([row, rowSeats]) => (
+                          <div key={row} className="flex items-center gap-3 min-w-0">
+                            <span className="text-xs font-mono font-bold text-amber-400 w-5 shrink-0 text-right select-none">{row}</span>
+                            <div className="flex flex-wrap gap-1.5">
+                              {rowSeats.sort((a, b) => a.seat_number - b.seat_number).map((seat) => {
+                                const isBooked = seat.status === 'Booked'
+                                return (
+                                  <button
+                                    key={seat.id}
+                                    type="button"
+                                    onClick={() => toggleSeat(seat)}
+                                    disabled={seat.status !== 'Available' && !selectedSeatIds.includes(seat.id)}
+                                    title={isBooked ? 'Sold' : seat.status}
+                                    className={`relative w-7 h-7 text-[9px] font-mono rounded border flex items-center justify-center transition-all duration-150 ${seatButtonClasses(seat)}`}
+                                  >
+                                    {isBooked ? (
+                                      <svg viewBox="0 0 10 10" className="w-3 h-3 opacity-40" fill="none" stroke="currentColor" strokeWidth="2">
+                                        <line x1="2" y1="2" x2="8" y2="8" />
+                                        <line x1="8" y1="2" x2="2" y2="8" />
+                                      </svg>
+                                    ) : (
+                                      seat.seat_number
+                                    )}
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+
+              <div className="flex flex-wrap gap-5 mt-6 pt-4 border-t border-white/[0.06] text-[11px] font-mono">
+                <span className="flex items-center gap-2 text-white/60">
+                  <span className="w-5 h-5 rounded border border-white/30 bg-white/[0.04] flex items-center justify-center text-[8px] text-white/60">8</span>
+                  Available
+                </span>
+                <span className="flex items-center gap-2 text-white/60">
+                  <span className="w-5 h-5 rounded border border-white/10 bg-white/[0.04] flex items-center justify-center">
+                    <svg viewBox="0 0 10 10" className="w-2.5 h-2.5 opacity-40" fill="none" stroke="white" strokeWidth="2">
+                      <line x1="2" y1="2" x2="8" y2="8" />
+                      <line x1="8" y1="2" x2="2" y2="8" />
+                    </svg>
+                  </span>
+                  Sold
+                </span>
+                <span className="flex items-center gap-2 text-green-300">
+                  <span className="w-5 h-5 rounded border border-green-400 bg-green-400/25 ring-1 ring-green-400/50 flex items-center justify-center text-[8px] text-green-300">8</span>
+                  Selected
+                </span>
+                <span className="flex items-center gap-2 text-amber-400/70">
+                  <span className="w-5 h-5 rounded border border-amber-500/40 bg-amber-500/10 flex items-center justify-center text-[8px] text-amber-400/50">8</span>
+                  Locked
+                </span>
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* Right Column: Ticket categories select */}
+        {/* Right Column: Ticket categories select (or seat-map summary) */}
         <div className="md:col-span-5 space-y-6">
           <div className="bg-stage/20 border border-white/[0.04] p-6 rounded-2xl">
-            <h2 className="font-display text-2xl tracking-wide text-paper uppercase mb-4">SELECT CATEGORY</h2>
-            
-            <div className="space-y-3">
-              {tickets.map((t) => {
-                const soldOut = t.available_seats <= 0
-                const isSelected = selected?.category === t.category
-                return (
-                  <button
-                    key={t.category}
-                    disabled={soldOut}
-                    onClick={() => setSelected(t)}
-                    className={`w-full text-left rounded-xl border p-4 transition-all duration-300 outline-none flex items-center justify-between ${
-                      soldOut
-                        ? 'border-edge bg-stage/10 opacity-30 cursor-not-allowed'
-                        : isSelected
-                        ? 'border-spot bg-spot/5 shadow-[0_0_15px_rgba(255,61,110,0.1)]'
-                        : 'border-white/[0.06] bg-white/[0.01] hover:border-white/[0.12] hover:bg-white/[0.02]'
-                    }`}
-                  >
-                    <div>
-                      <span className="font-display text-lg tracking-wider text-paper uppercase block">{t.category}</span>
-                      <span className="text-[10px] text-haze font-mono block mt-0.5">
-                        {soldOut ? 'Sold out' : `${t.available_seats} seats remaining`}
-                      </span>
-                    </div>
-                    <span className="font-mono text-base text-spot2 font-semibold">₹{t.price_inr}</span>
-                  </button>
-                )
-              })}
-            </div>
-
-            {selected && (
-              <div className="border-t border-white/[0.04] pt-6 mt-6 space-y-6 animate-scale-in">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-mono text-haze uppercase tracking-wider">Number of seats</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={selected.available_seats}
-                    value={seats}
-                    onChange={(e) => setSeats(Math.max(1, Number(e.target.value)))}
-                    className="field w-24 text-center font-mono !py-1.5"
-                    disabled={status === 'paying'}
-                  />
+            {hasSeatMap ? (
+              <>
+                <h2 className="font-display text-2xl tracking-wide text-paper uppercase mb-4">YOUR SELECTION</h2>
+                {selectedSeatIds.length === 0 ? (
+                  <p className="text-xs text-haze font-mono">Tap seats on the seat map to select them.</p>
+                ) : (
+                  <div className="space-y-3">
+                    <p className="text-xs font-mono text-haze">
+                      {selectedSeatCategory} · {selectedSeatLabels.map((s) => s.label).join(', ')}
+                    </p>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <h2 className="font-display text-2xl tracking-wide text-paper uppercase mb-4">SELECT CATEGORY</h2>
+                <div className="space-y-3">
+                  {tickets.map((t) => {
+                    const soldOut = t.available_seats <= 0
+                    const isSelected = selected?.category === t.category
+                    return (
+                      <button
+                        key={t.category}
+                        disabled={soldOut}
+                        onClick={() => setSelected(t)}
+                        className={`w-full text-left rounded-xl border p-4 transition-all duration-300 outline-none flex items-center justify-between ${
+                          soldOut
+                            ? 'border-edge bg-stage/10 opacity-30 cursor-not-allowed'
+                            : isSelected
+                            ? 'border-spot bg-spot/5 shadow-[0_0_15px_rgba(255,61,110,0.1)]'
+                            : 'border-white/[0.06] bg-white/[0.01] hover:border-white/[0.12] hover:bg-white/[0.02]'
+                        }`}
+                      >
+                        <div>
+                          <span className="font-display text-lg tracking-wider text-paper uppercase block">{t.category}</span>
+                          <span className="text-[10px] text-haze font-mono block mt-0.5">
+                            {soldOut ? 'Sold out' : `${t.available_seats} seats remaining`}
+                          </span>
+                        </div>
+                        <span className="font-mono text-base text-spot2 font-semibold">₹{t.price_inr}</span>
+                      </button>
+                    )
+                  })}
                 </div>
 
-                <div className="flex items-end justify-between border-t border-white/[0.04] pt-4">
+                {selected && (
+                  <div className="border-t border-white/[0.04] pt-6 mt-6 space-y-6 animate-scale-in">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-mono text-haze uppercase tracking-wider">Number of seats</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={selected.available_seats}
+                        value={seats}
+                        onChange={(e) => setSeats(Math.max(1, Number(e.target.value)))}
+                        className="field w-24 text-center font-mono !py-1.5"
+                        disabled={status === 'paying'}
+                      />
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {canPay && (
+              <div className="border-t border-white/[0.04] pt-4 mt-6 space-y-4">
+                <div className="flex items-end justify-between">
                   <div>
                     <span className="text-[10px] font-mono text-haze uppercase block">Total Due</span>
-                    <span className="font-display text-3xl text-spot2">₹{selected.price_inr * seats}</span>
+                    <span className="font-display text-3xl text-spot2">₹{total}</span>
                   </div>
-                  
-                  {isAdmin ? (
+
+                  {isAdmin !== false ? (
                     <div className="bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-mono py-2.5 px-4 rounded-xl max-w-[200px]">
-                      Admins cannot book tickets
+                      {isAdmin === null ? 'Checking account…' : 'Admins cannot book tickets'}
                     </div>
                   ) : (
                     <button onClick={handlePay} disabled={status === 'paying'} className="btn-spot text-sm">
@@ -369,13 +596,13 @@ export default function ConcertDetailPage() {
                     </button>
                   )}
                 </div>
-
-                {error && (
-                  <p className="text-spot text-xs font-mono mt-3 text-right">
-                    ❌ {error}
-                  </p>
-                )}
               </div>
+            )}
+
+            {error && (
+              <p className="text-spot text-xs font-mono mt-3 text-right">
+                ❌ {error}
+              </p>
             )}
           </div>
         </div>

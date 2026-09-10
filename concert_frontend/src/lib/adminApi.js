@@ -87,4 +87,12 @@ export const adminApi = {
       method: 'POST',
       body: { reason },
     }),
+
+  // Seat layout builder — defines the interactive seat map for an event,
+  // one row at a time (see seat_selection_migration.sql). Events with no
+  // rows added stay on the plain quantity-based booking flow.
+  addSeatRow: (payload) => adminRequest('/admin/seat-layout/add-row', { method: 'POST', body: payload }),
+  getSeatLayout: (eventId) => adminRequest(`/admin/seat-layout/${eventId}`),
+  deleteSeatRow: (eventId, seatRow) =>
+    adminRequest(`/admin/seat-layout/${eventId}/row/${encodeURIComponent(seatRow)}`, { method: 'DELETE' }),
 }

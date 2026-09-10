@@ -7,14 +7,22 @@ function getToken() {
   return localStorage.getItem('access_token')
 }
 
-function setSession({ access_token, user_id, email }) {
+function getRefreshToken() {
+  return localStorage.getItem('refresh_token')
+}
+
+function setSession({ access_token, refresh_token, user_id, email }) {
   localStorage.setItem('access_token', access_token)
   localStorage.setItem('user_id', user_id)
   localStorage.setItem('email', email)
+  // Persist the refresh_token so we can silently renew the access_token
+  // when it expires (Supabase default: 1 hour) without forcing a re-login.
+  if (refresh_token) localStorage.setItem('refresh_token', refresh_token)
 }
 
 function clearSession() {
   localStorage.removeItem('access_token')
+  localStorage.removeItem('refresh_token')
   localStorage.removeItem('user_id')
   localStorage.removeItem('email')
 }
@@ -30,7 +38,50 @@ function getSessionId() {
   return sid
 }
 
-async function request(path, { method = 'GET', body, auth = false } = {}) {
+// Attempts a silent token refresh using the stored refresh_token.
+// Returns true if the new access_token was saved, false if refresh failed
+// (token expired/revoked) — in which case the session is cleared so the
+// next auth check redirects to login cleanly.
+let _refreshing = null // deduplicate concurrent refresh attempts
+async function tryRefreshToken() {
+  if (_refreshing) return _refreshing
+  _refreshing = (async () => {
+    const refreshToken = getRefreshToken()
+    if (!refreshToken) return false
+    try {
+      // Call Supabase Auth directly — no backend endpoint needed.
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+      if (!supabaseUrl) return false
+      const res = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=refresh_token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY || '' },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      })
+      if (!res.ok) {
+        clearSession()
+        return false
+      }
+      const data = await res.json()
+      setSession({
+        access_token: data.access_token,
+        refresh_token: data.refresh_token,
+        user_id: data.user?.id || localStorage.getItem('user_id'),
+        email: data.user?.email || localStorage.getItem('email'),
+      })
+      return true
+    } catch {
+      clearSession()
+      return false
+    }
+  })()
+  try {
+    return await _refreshing
+  } finally {
+    _refreshing = null
+  }
+}
+
+async function request(path, { method = 'GET', body, auth = false, _retried = false } = {}) {
   const headers = { 'Content-Type': 'application/json' }
   if (auth) {
     const token = getToken()
@@ -43,6 +94,16 @@ async function request(path, { method = 'GET', body, auth = false } = {}) {
     headers,
     body: body ? JSON.stringify(body) : undefined,
   })
+
+  // On 401, try a silent token refresh once and replay the request.
+  // This handles the common case where the access_token expired mid-session
+  // (Supabase default: 1 hour) without forcing the user to log in again.
+  if (res.status === 401 && auth && !_retried) {
+    const refreshed = await tryRefreshToken()
+    if (refreshed) return request(path, { method, body, auth, _retried: true })
+    // Refresh failed — session is cleared, surface a clean error.
+    throw new Error('Session expired. Please log in again.')
+  }
 
   const data = await res.json().catch(() => ({}))
 
@@ -158,6 +219,23 @@ export const api = {
   },
 
   myShowSubmissions: () => request('/shows/my-submissions', { auth: true }),
+
+  // Seat-map (BookMyShow/PVR-style) - only meaningful for events an admin
+  // has built a seat layout for; has_seat_map=false for everything else,
+  // in which case the frontend falls back to the plain quantity picker.
+  getSeatMap: (eventId) => request(`/concerts/${eventId}/seats`),
+
+  lockSeats: (event_id, seat_ids) =>
+    request('/bookings/lock-seats', { method: 'POST', auth: true, body: { event_id, seat_ids } }),
+
+  releaseSeats: (seat_ids) =>
+    request('/bookings/release-seats', { method: 'POST', auth: true, body: { seat_ids } }),
+
+  createOrderSeats: (event_id, seat_ids) =>
+    request('/bookings/create-order-seats', { method: 'POST', auth: true, body: { event_id, seat_ids } }),
+
+  // Public digital pass endpoint — no auth required, used by QR code scanner / verification page
+  getTicketPass: (bookingId) => request(`/bookings/${bookingId}/pass`),
 }
 
 export function getPublicPassUrl(bookingId) {

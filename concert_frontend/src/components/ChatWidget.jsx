@@ -43,7 +43,7 @@ function linkify(text) {
 export default function ChatWidget() {
   const location = useLocation()
   const [loggedIn, setLoggedIn] = useState(api.isLoggedIn())
-  const [isAdmin, setIsAdmin] = useState(false)
+  const [isAdmin, setIsAdmin] = useState(null) // null = "not checked yet"
   const [isOpen, setIsOpen] = useState(false)
   const [messages, setMessages] = useState([
     {
@@ -71,7 +71,7 @@ export default function ChatWidget() {
   // only shows the customer nav links to non-admins.
   useEffect(() => {
     if (!loggedIn) {
-      setIsAdmin(false)
+      setIsAdmin(null)
       return
     }
     api.myProfile().then((p) => setIsAdmin(!!p?.is_admin)).catch(() => {})
@@ -167,8 +167,11 @@ export default function ChatWidget() {
       setSending(false)
     }
   }
-    // Only render floating chat assistant for logged-in, non-admin customers
-  if (!loggedIn || isAdmin) {
+    // Only render floating chat assistant for logged-in, confirmed non-admin
+  // customers. isAdmin === null means "not checked yet" - stay hidden until
+  // we know for sure, otherwise it flashes visible until the profile fetch
+  // resolves and then disappears.
+  if (!loggedIn || isAdmin !== false) {
     return null
   }
   return (
