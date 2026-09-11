@@ -15,7 +15,7 @@ def list_concerts(
     Returns all upcoming events, optionally filtered by city, event_type, and dates.
     Public endpoint - no login required, just like browsing BookMyShow.
     """
-    query = supabase_admin.table("events").select("*, ticket_categories(price_inr)").eq("status", "Upcoming")
+    query = supabase_admin.table("events").select("*, ticket_categories(price_inr)").in_("status", ["Upcoming", "Sold Out"])
     if city:
         query = query.eq("city", city)
     if event_type:

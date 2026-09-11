@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { adminApi } from '../lib/adminApi'
 import { api } from '../lib/api'
+import AnalyticsDashboard from '../components/AnalyticsDashboard'
 
 const emptyEvent = {
   artist_id: '', artist_name: '', venue_id: '', venue_name: '',
@@ -389,6 +390,7 @@ export default function AdminPage() {
         <div className="md:col-span-3 flex flex-row md:flex-col gap-2 overflow-x-auto md:overflow-visible pb-3 md:pb-0 border-b md:border-b-0 md:border-r border-white/[0.04] pr-0 md:pr-6">
           {[
             { id: 'assistant', label: '🤖 AI Agent', icon: '⚡' },
+            { id: 'analytics', label: '📊 Analytics', icon: '📈' },
             { id: 'events', label: '📅 Event Setup', icon: '📝' },
             { id: 'pricing', label: '🎟️ Ticket Rates', icon: '🏷️' },
             { id: 'bookings', label: '📋 Bookings List', icon: '🧾' },
@@ -420,7 +422,10 @@ export default function AdminPage() {
           {msg && <div className="border border-go/20 bg-go/5 text-go text-xs font-mono rounded-xl p-4">{msg}</div>}
           {error && <div className="border border-spot/20 bg-spot/5 text-spot text-xs font-mono rounded-xl p-4">{error}</div>}
 
-
+          {/* 0. Analytics Dashboard Panel */}
+          {tab === 'analytics' && (
+            <AnalyticsDashboard />
+          )}
 
           {/* 1. AI Assistant Panel */}
           {tab === 'assistant' && (

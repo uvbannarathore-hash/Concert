@@ -44,6 +44,7 @@ export default function HomePage() {
   const [error, setError] = useState('')
   const [profile, setProfile] = useState(null)
   const [userLocation, setUserLocation] = useState(null)
+  const [recentlyViewed, setRecentlyViewed] = useState([])
 
   // Carousel State
   const [currentSlide, setCurrentSlide] = useState(0)
@@ -62,6 +63,18 @@ export default function HomePage() {
       () => {},
       { timeout: 8000 }
     )
+
+    try {
+      const stored = localStorage.getItem('recentlyViewedEvents')
+      if (stored) {
+        const parsed = JSON.parse(stored)
+        if (Array.isArray(parsed)) {
+          setRecentlyViewed(parsed.filter(e => e && e.event_id))
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to parse recentlyViewedEvents', e)
+    }
   }, [])
 
   useEffect(() => {
@@ -260,6 +273,32 @@ export default function HomePage() {
           ))}
         </div>
       </section>
+
+      {/* Recently Viewed Section */}
+      {(() => {
+        const validRecentlyViewed = recentlyViewed
+          .map(e => {
+            const liveEvent = events.find(ev => ev.event_id === e.event_id)
+            if (!liveEvent) return null;
+            return { ...e, status: liveEvent.status, showtimes: [] }
+          })
+          .filter(Boolean)
+
+        if (validRecentlyViewed.length === 0 || searchQuery) return null;
+
+        return (
+          <section className="max-w-6xl mx-auto px-6 pt-10 pb-4">
+            <h2 className="font-display text-2xl tracking-wide uppercase text-paper mb-6">Recently Viewed</h2>
+            <div className="flex gap-6 overflow-x-auto pb-4 scrollbar-none snap-x snap-mandatory">
+              {validRecentlyViewed.map((e) => (
+                <div key={e.event_id} className="min-w-[280px] max-w-[280px] snap-start flex-shrink-0">
+                  <ConcertCard event={e} />
+                </div>
+              ))}
+            </div>
+          </section>
+        )
+      })()}
 
       {/* Main Events Search & Listing Section */}
       <section className="max-w-6xl mx-auto px-6 py-14">

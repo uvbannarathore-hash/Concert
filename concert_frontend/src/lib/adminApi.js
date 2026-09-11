@@ -95,4 +95,11 @@ export const adminApi = {
   getSeatLayout: (eventId) => adminRequest(`/admin/seat-layout/${eventId}`),
   deleteSeatRow: (eventId, seatRow) =>
     adminRequest(`/admin/seat-layout/${eventId}/row/${encodeURIComponent(seatRow)}`, { method: 'DELETE' }),
+
+  // Analytics Dashboard
+  getAnalyticsOverview: () => adminRequest('/admin/analytics/overview'),
+  getAnalyticsRevenue: () => adminRequest('/admin/analytics/revenue'),
+  getAnalyticsBookings: () => adminRequest('/admin/analytics/bookings'),
+  getTopEvents: () => adminRequest('/admin/analytics/top-events'),
+  getCategorySales: () => adminRequest('/admin/analytics/category-sales'),
 }

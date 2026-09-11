@@ -63,6 +63,10 @@ export default function ConcertDetailPage() {
   const [selectedSeatIds, setSelectedSeatIds] = useState([])
   const [selectedSeatCategory, setSelectedSeatCategory] = useState(null)
 
+  // Waitlist state
+  const [waitlistJoined, setWaitlistJoined] = useState(false)
+  const [waitlistLoading, setWaitlistLoading] = useState(false)
+
   const [couponCode, setCouponCode] = useState('')
   const [appliedCoupon, setAppliedCoupon] = useState(null)
   const [couponError, setCouponError] = useState('')
@@ -80,6 +84,35 @@ export default function ConcertDetailPage() {
       .then((data) => {
         setEvent(data.event)
         setTickets(data.ticket_categories || [])
+
+        // Save to recently viewed
+        try {
+          if (data.event && data.event.event_id) {
+            const currentStr = localStorage.getItem('recentlyViewedEvents')
+            let current = []
+            if (currentStr) {
+              current = JSON.parse(currentStr)
+              if (!Array.isArray(current)) current = []
+            }
+            // Remove if already exists
+            current = current.filter(e => e.event_id !== data.event.event_id)
+            // Add to front
+            current.unshift({
+              event_id: data.event.event_id,
+              artist_name: data.event.artist_name,
+              venue_name: data.event.venue_name,
+              image_url: data.event.image_url,
+              city: data.event.city,
+              event_date: data.event.event_date,
+              event_time: data.event.event_time
+            })
+            // Keep max 10
+            if (current.length > 10) current = current.slice(0, 10)
+            localStorage.setItem('recentlyViewedEvents', JSON.stringify(current))
+          }
+        } catch (e) {
+          console.warn('Could not save to recentlyViewedEvents', e)
+        }
       })
       .catch((err) => setError(err.message))
 
@@ -87,6 +120,12 @@ export default function ConcertDetailPage() {
       .getSeatMap(eventId)
       .then((data) => setSeatMap(data))
       .catch(() => setSeatMap({ seats: [], has_seat_map: false }))
+
+    if (api.isLoggedIn()) {
+      api.getWaitlistStatus(eventId)
+         .then((res) => setWaitlistJoined(res.joined))
+         .catch(() => {})
+    }
   }, [eventId])
 
   const hasSeatMap = seatMap?.has_seat_map === true
@@ -164,6 +203,28 @@ export default function ConcertDetailPage() {
       setCouponError(err.message)
     } finally {
       setCouponLoading(false)
+    }
+  }
+
+  async function handleToggleWaitlist() {
+    if (!api.isLoggedIn()) {
+      navigate('/login')
+      return
+    }
+    setWaitlistLoading(true)
+    setError('')
+    try {
+      if (waitlistJoined) {
+        await api.leaveWaitlist(eventId)
+        setWaitlistJoined(false)
+      } else {
+        await api.joinWaitlist(eventId)
+        setWaitlistJoined(true)
+      }
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setWaitlistLoading(false)
     }
   }
 
@@ -565,7 +626,24 @@ export default function ConcertDetailPage() {
         {/* Right Column: Ticket categories select (or seat-map summary) */}
         <div className="md:col-span-5 space-y-6">
           <div className="bg-stage/20 border border-white/[0.04] p-6 rounded-2xl">
-            {hasSeatMap ? (
+            {event.status === 'Sold Out' ? (
+              <div className="text-center py-6">
+                <h2 className="font-display text-2xl tracking-wide text-paper uppercase mb-4">Event is Sold Out</h2>
+                <p className="text-sm text-haze mb-6">
+                  There are currently no tickets available. Join the waitlist to be notified if seats open up!
+                </p>
+                <button
+                  onClick={handleToggleWaitlist}
+                  disabled={waitlistLoading}
+                  className={waitlistJoined ? 'btn-ghost w-full' : 'btn-spot w-full'}
+                >
+                  {waitlistLoading ? 'Processing...' : waitlistJoined ? 'Leave Waitlist' : 'Join Waitlist'}
+                </button>
+                {waitlistJoined && (
+                  <p className="text-go text-xs font-mono mt-4">✅ You are on the waitlist!</p>
+                )}
+              </div>
+            ) : hasSeatMap ? (
               <>
                 <h2 className="font-display text-2xl tracking-wide text-paper uppercase mb-4">YOUR SELECTION</h2>
                 {selectedSeatIds.length === 0 ? (
@@ -629,7 +707,7 @@ export default function ConcertDetailPage() {
               </>
             )}
 
-            {canPay && (
+            {event.status !== 'Sold Out' && canPay && (
               <div className="border-t border-white/[0.04] pt-4 mt-6 space-y-4">
                 
                 {/* Promo Code Input */}

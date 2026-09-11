@@ -303,6 +303,11 @@ export const api = {
     if (venue_id) params.set('venue_id', venue_id)
     return request(`/reviews?${params.toString()}`)
   },
+
+  // Waitlist endpoints
+  joinWaitlist: (eventId) => request(`/waitlist/join/${eventId}`, { method: 'POST', auth: true }),
+  getWaitlistStatus: (eventId) => request(`/waitlist/status/${eventId}`, { auth: true }),
+  leaveWaitlist: (eventId) => request(`/waitlist/leave/${eventId}`, { method: 'DELETE', auth: true }),
 }
 
 export function getPublicPassUrl(bookingId) {

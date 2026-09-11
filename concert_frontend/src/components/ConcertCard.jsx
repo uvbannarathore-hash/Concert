@@ -199,7 +199,7 @@ export default function ConcertCard({ event, wishlisted = false, onWishlistChang
               s.status === 'Cancelled'
                 ? 'border-edge/50 text-haze/30 line-through pointer-events-none opacity-40'
                 : s.status === 'Sold Out'
-                ? 'border-spot/20 text-spot bg-spot/5 cursor-not-allowed pointer-events-none'
+                ? 'border-spot/20 text-spot bg-spot/5 hover:bg-spot/10'
                 : 'border-white/[0.06] bg-white/[0.02] text-paper hover:border-go/60 hover:text-go hover:bg-go/5'
             }`}
           >
