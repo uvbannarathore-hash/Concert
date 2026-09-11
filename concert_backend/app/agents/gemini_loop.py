@@ -29,7 +29,7 @@ from app.config import GEMINI_API_KEY
 
 logger = logging.getLogger("gemini_loop")
 
-MODEL_NAME = "gemini-3.6-flash"
+MODEL_NAME = "gemini-3.1-flash-lite"
 MAX_TOOL_ITERATIONS = 8  # safety valve against infinite tool-call loops
 
 _client = genai.Client(api_key=GEMINI_API_KEY)

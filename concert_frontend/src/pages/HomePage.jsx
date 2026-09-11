@@ -45,6 +45,9 @@ export default function HomePage() {
   const [profile, setProfile] = useState(null)
   const [userLocation, setUserLocation] = useState(null)
   const [recentlyViewed, setRecentlyViewed] = useState([])
+  const [aiSearchResults, setAiSearchResults] = useState([])
+  const [aiSearchLoading, setAiSearchLoading] = useState(false)
+  const [aiSearchError, setAiSearchError] = useState('')
 
   // Carousel State
   const [currentSlide, setCurrentSlide] = useState(0)
@@ -91,6 +94,21 @@ export default function HomePage() {
       api.myProfile().then(setProfile).catch(() => {})
     }
   }, [])
+
+  // Semantic search: fires when searchQuery changes
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setAiSearchResults([])
+      setAiSearchError('')
+      return
+    }
+    setAiSearchLoading(true)
+    setAiSearchError('')
+    api.semanticSearch(searchQuery.trim())
+      .then((data) => setAiSearchResults(data.results || []))
+      .catch(() => setAiSearchError('Semantic search failed. Showing keyword matches instead.'))
+      .finally(() => setAiSearchLoading(false))
+  }, [searchQuery])
 
   // Auto-rotate carousel slides
   useEffect(() => {
@@ -310,7 +328,11 @@ export default function HomePage() {
               {searchQuery ? `Search: "${searchQuery}"` : 'On Sale Now'}
             </h2>
             <p className="text-xs text-haze/60 font-mono mt-1">
-              Showing {groupedEvents.length} active shows
+              {searchQuery
+                ? aiSearchLoading
+                  ? 'Running AI search...'
+                  : `${aiSearchError ? 'Keyword' : 'Semantic'} results: ${aiSearchError ? groupedEvents.length : aiSearchResults.length} matches`
+                : `Showing ${groupedEvents.length} active shows`}
             </p>
           </div>
 
@@ -388,8 +410,39 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* Loading Skeletons */}
-        {loading && (
+        {/* AI Search Loading Skeleton */}
+        {aiSearchLoading && searchQuery && (
+          <div className="flex flex-col items-center gap-4 py-16">
+            <div className="w-8 h-8 rounded-full border-2 border-spot border-t-transparent animate-spin"/>
+            <p className="text-haze text-sm font-mono">AI searching for "{searchQuery}"...</p>
+          </div>
+        )}
+
+        {/* AI Error (fall through to keyword) */}
+        {aiSearchError && searchQuery && !aiSearchLoading && (
+          <p className="text-haze/60 text-xs font-mono mb-4">⚠ {aiSearchError}</p>
+        )}
+
+        {/* Semantic search results */}
+        {!aiSearchLoading && searchQuery && !aiSearchError && aiSearchResults.length > 0 && (
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {aiSearchResults.map((e) => (
+              <ConcertCard key={e.event_id} event={{ ...e, showtimes: [] }} />
+            ))}
+          </div>
+        )}
+
+        {/* Semantic search no results */}
+        {!aiSearchLoading && searchQuery && !aiSearchError && aiSearchResults.length === 0 && (
+          <div className="text-center py-24 border border-dashed border-white/[0.06] rounded-2xl max-w-2xl mx-auto bg-stage2/5">
+            <span className="text-4xl">🔍</span>
+            <p className="font-display text-2xl mb-2 text-paper mt-3 uppercase tracking-wide">No semantic matches</p>
+            <p className="text-sm text-haze max-w-sm mx-auto">Try a different phrase, or clear the search to browse all shows.</p>
+          </div>
+        )}
+
+        {/* Normal loading state (when no search query) */}
+        {loading && !searchQuery && (
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6 animate-pulse">
             {[1, 2, 3].map((n) => (
               <div key={n} className="border border-white/[0.04] bg-stage2/20 rounded-2xl h-80 flex flex-col justify-between p-5">
@@ -405,14 +458,14 @@ export default function HomePage() {
         )}
 
         {/* Error message */}
-        {error && (
+        {error && !searchQuery && (
           <div className="border border-spot/20 bg-spot/5 text-spot rounded-2xl p-6 text-center text-sm font-mono max-w-md mx-auto">
             ⚠️ Network error: {error}
           </div>
         )}
 
-        {/* Empty state */}
-        {!loading && !error && groupedEvents.length === 0 && (
+        {/* Empty state — keyword fallback OR no search */}
+        {!loading && !error && !searchQuery && groupedEvents.length === 0 && (
           <div className="text-center py-24 border border-dashed border-white/[0.06] rounded-2xl max-w-2xl mx-auto bg-stage2/5">
             <span className="text-4xl">🎫</span>
             <p className="font-display text-2xl mb-2 text-paper mt-3 uppercase tracking-wide">Nothing matches your search</p>
@@ -433,8 +486,8 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* Events Grid */}
-        {!loading && !error && (
+        {/* Events Grid — only shown when NOT in AI search mode */}
+        {!searchQuery && !loading && !error && groupedEvents.length > 0 && (
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
             {groupedEvents.map((group) => (
               <ConcertCard

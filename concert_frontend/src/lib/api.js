@@ -308,6 +308,10 @@ export const api = {
   joinWaitlist: (eventId) => request(`/waitlist/join/${eventId}`, { method: 'POST', auth: true }),
   getWaitlistStatus: (eventId) => request(`/waitlist/status/${eventId}`, { auth: true }),
   leaveWaitlist: (eventId) => request(`/waitlist/leave/${eventId}`, { method: 'DELETE', auth: true }),
+
+  // AI Semantic Search
+  semanticSearch: (query) =>
+    request('/ai/search', { method: 'POST', body: { query } }),
 }
 
 export function getPublicPassUrl(bookingId) {

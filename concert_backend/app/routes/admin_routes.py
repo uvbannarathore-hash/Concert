@@ -1,14 +1,45 @@
 import time
 import uuid
 import hashlib
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+import logging
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from typing import Optional, Dict
 from app.admin_auth import get_current_admin
 from app.supabase_client import supabase_admin
 from app.agents import admin_agent
+from app.services import embedding_service
+
+logger = logging.getLogger("admin_routes")
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+# ---------------------------------------------------------------------------
+# Embedding helper — called as a BackgroundTask after event creation/update
+# ---------------------------------------------------------------------------
+
+def _generate_and_store_embedding(event_id: str, event_data: dict):
+    """
+    Generates a Gemini Embedding 2 (768-dim) embedding for the event and
+    stores it in events.embedding. Called as a background task so it never
+    blocks the HTTP response. Failures are logged; event creation still
+    succeeds even if embedding generation fails.
+    """
+    try:
+        vector = embedding_service.generate_event_embedding(event_data)
+        if vector:
+            supabase_admin.table("events") \
+                .update({"embedding": vector}) \
+                .eq("event_id", event_id) \
+                .execute()
+            logger.info(f"Embedding stored for event {event_id}")
+        else:
+            logger.warning(f"Embedding generation returned None for event {event_id}")
+    except Exception as exc:
+        logger.error(f"Failed to store embedding for event {event_id}: {exc}")
+
+
 
 
 # ---------- Admin AI Assistant ----------
@@ -110,7 +141,7 @@ class CreateEventRequest(BaseModel):
 
 
 @router.post("/events")
-def create_event(payload: CreateEventRequest, admin=Depends(get_current_admin)):
+def create_event(payload: CreateEventRequest, background_tasks: BackgroundTasks, admin=Depends(get_current_admin)):
     normalized_venue_name = payload.venue_name.strip()
     normalized_city = payload.city.strip()
     
@@ -129,23 +160,23 @@ def create_event(payload: CreateEventRequest, admin=Depends(get_current_admin)):
         }).execute()
 
     event_id = f"EVT{uuid.uuid4().hex[:12]}"
-    supabase_admin.table("events").insert(
-        {
-            "event_id": event_id,
-            "artist_id": payload.artist_id,
-            "artist_name": payload.artist_name,
-            "venue_id": venue_id,
-            "venue_name": payload.venue_name,
-            "city": payload.city,
-            "event_date": payload.event_date,
-            "event_time": payload.event_time,
-            "event_type": payload.event_type,
-            "description": payload.description,
-            "status": "Upcoming",
-            "latitude": payload.latitude,
-            "longitude": payload.longitude,
-        }
-    ).execute()
+    event_row = {
+        "event_id": event_id,
+        "artist_id": payload.artist_id,
+        "artist_name": payload.artist_name,
+        "venue_id": venue_id,
+        "venue_name": payload.venue_name,
+        "city": payload.city,
+        "event_date": payload.event_date,
+        "event_time": payload.event_time,
+        "event_type": payload.event_type,
+        "description": payload.description,
+        "status": "Upcoming",
+        "latitude": payload.latitude,
+        "longitude": payload.longitude,
+    }
+    supabase_admin.table("events").insert(event_row).execute()
+    background_tasks.add_task(_generate_and_store_embedding, event_id, event_row)
     return {"message": "Event created", "event_id": event_id}
 
 
@@ -233,7 +264,7 @@ def list_show_submissions(status: str = "Pending", admin=Depends(get_current_adm
 
 
 @router.post("/show-submissions/{submission_id}/approve")
-def approve_show_submission(submission_id: int, admin=Depends(get_current_admin)):
+def approve_show_submission(submission_id: int, background_tasks: BackgroundTasks, admin=Depends(get_current_admin)):
     """
     Converts a pending submission into a real, live event. Uses the exact
     same create_event_with_pricing RPC as the admin AI assistant's
@@ -316,6 +347,19 @@ def approve_show_submission(submission_id: int, admin=Depends(get_current_admin)
             "created_event_id": event_id,
         }
     ).eq("id", submission_id).execute()
+
+    # Schedule embedding generation in background (consistent with create_event)
+    event_row_for_embedding = {
+        "event_id": event_id,
+        "artist_name": row["artist_name"],
+        "venue_name": row["venue_name"],
+        "city": row["city"],
+        "event_date": row["event_date"],
+        "event_time": row["event_time"],
+        "event_type": row["event_type"],
+        "description": None,
+    }
+    background_tasks.add_task(_generate_and_store_embedding, event_id, event_row_for_embedding)
 
     return {"message": "Submission approved and published", "event_id": event_id}
 
