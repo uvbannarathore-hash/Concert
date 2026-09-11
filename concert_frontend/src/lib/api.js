@@ -291,6 +291,18 @@ export const api = {
     if (!res.ok) throw new Error('Image upload failed')
     return res.json()
   },
+
+  // Reviews
+  createReview: (event_id, rating, review_text) =>
+    request('/reviews', { method: 'POST', auth: true, body: { event_id, rating, review_text } }),
+  
+  getReviews: ({ event_id, artist_id, venue_id }) => {
+    const params = new URLSearchParams()
+    if (event_id) params.set('event_id', event_id)
+    if (artist_id) params.set('artist_id', artist_id)
+    if (venue_id) params.set('venue_id', venue_id)
+    return request(`/reviews?${params.toString()}`)
+  },
 }
 
 export function getPublicPassUrl(bookingId) {

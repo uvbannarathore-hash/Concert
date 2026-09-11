@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import { QRCodeSVG } from 'qrcode.react'
 import { api, getPublicPassUrl } from '../lib/api'
 import DigitalPassModal from '../components/DigitalPassModal'
+import ReviewList from '../components/ReviewList'
 
 function loadRazorpayScript() {
   return new Promise((resolve) => {
@@ -683,6 +684,13 @@ export default function ConcertDetailPage() {
           </div>
         </div>
 
+      </div>
+
+      <div className="mt-16 border-t border-white/[0.04] pt-12">
+        <h2 className="font-display text-3xl tracking-wide text-paper uppercase mb-8">Fan Reviews</h2>
+        <div className="max-w-2xl">
+          <ReviewList eventId={eventId} />
+        </div>
       </div>
     </div>
   )

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { QRCodeSVG } from 'qrcode.react'
 import { api, getPublicPassUrl } from '../lib/api'
 import DigitalPassModal from '../components/DigitalPassModal'
+import ReviewModal from '../components/ReviewModal'
 
 const statusStyles = {
   Confirmed: 'text-go border-go/20 bg-go/5',
@@ -17,6 +18,7 @@ export default function BookingsPage() {
   const [cancellingId, setCancellingId] = useState('')
   const [refundingId, setRefundingId] = useState('')
   const [selectedPass, setSelectedPass] = useState(null)
+  const [reviewingEvent, setReviewingEvent] = useState(null)
   const [razorpayKeyId, setRazorpayKeyId] = useState('')
 
   function loadRazorpayScript() {
@@ -125,6 +127,16 @@ export default function BookingsPage() {
       return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
     } catch {
       return dateStr
+    }
+  }
+
+  const checkIsPastEvent = (dateStr, timeStr) => {
+    try {
+      const dt = new Date(`${dateStr} ${timeStr || '00:00'}`)
+      if (isNaN(dt.getTime())) return false
+      return dt < new Date()
+    } catch {
+      return false
     }
   }
 
@@ -392,6 +404,15 @@ export default function BookingsPage() {
                       Complete Payment
                     </button>
                   )}
+
+                  {isConfirmed && b.payment_status === 'Paid' && checkIsPastEvent(eventDetails.event_date, eventDetails.event_time) && (
+                    <button
+                      onClick={() => setReviewingEvent(eventDetails)}
+                      className="text-[11px] text-white hover:text-void bg-white/10 hover:bg-white rounded px-2 py-1 font-mono transition w-full mt-2 uppercase tracking-wider"
+                    >
+                      Leave a Review
+                    </button>
+                  )}
                 </div>
 
               </div>
@@ -405,6 +426,16 @@ export default function BookingsPage() {
         isOpen={!!selectedPass}
         onClose={() => setSelectedPass(null)}
         booking={selectedPass}
+      />
+
+      <ReviewModal
+        isOpen={!!reviewingEvent}
+        onClose={() => setReviewingEvent(null)}
+        event={reviewingEvent}
+        onSuccess={() => {
+          alert('Review submitted successfully!')
+          load()
+        }}
       />
     </div>
   )

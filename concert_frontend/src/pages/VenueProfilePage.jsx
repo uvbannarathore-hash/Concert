@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import ConcertCard from '../components/ConcertCard'
+import ReviewList from '../components/ReviewList'
 
 export default function VenueProfilePage() {
   const { id } = useParams()
@@ -151,6 +152,16 @@ export default function VenueProfilePage() {
           </div>
         </div>
       )}
+
+      {/* Reviews */}
+      <div className="mt-16 border-t border-white/[0.04] pt-12">
+        <h2 className="text-2xl font-display text-paper mb-8 tracking-wide">
+          Venue Reviews
+        </h2>
+        <div className="max-w-2xl">
+          <ReviewList venueId={id} />
+        </div>
+      </div>
     </div>
   )
 }
