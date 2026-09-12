@@ -12,14 +12,20 @@ almost verbatim, since those were already tuned through real usage.
 """
 
 from app.supabase_client import supabase_admin
+from google import genai
+from app.config import GEMINI_API_KEY
 
+_client = genai.Client(api_key=GEMINI_API_KEY)
+_last_generated_description: str | None = None
 
 # ---------------------------------------------------------------------------
 # Tool implementations
 # ---------------------------------------------------------------------------
 
 def list_events() -> dict:
-    result = supabase_admin.table("events").select("*").execute()
+    # Select only essential fields to prevent large payloads (like embeddings) from exhausting AI context
+    fields = "event_id, artist_name, venue_name, city, event_date, event_time, event_type, status, ticket_categories(price_inr)"
+    result = supabase_admin.table("events").select(fields).execute()
     return {"events": result.data}
 
 
@@ -36,7 +42,17 @@ def update_event(
     image_url: str = None,
     latitude: str = None,
     longitude: str = None,
+    description: str = None,
+    generated_description: str = None,
 ) -> dict:
+    # Use provided description, fallback to generated_description from flow, then to last stored description.
+    if description is None:
+        if generated_description is not None:
+            description = generated_description
+        elif _last_generated_description is not None:
+            description = _last_generated_description
+            # Clear after use
+            _last_generated_description = None
     fields = {
         "artist_name": artist_name,
         "venue_name": venue_name,
@@ -49,10 +65,9 @@ def update_event(
         "image_url": image_url,
         "latitude": latitude,
         "longitude": longitude,
+        "description": description,
     }
-    # Only send fields the admin actually mentioned - leave the rest
-    # untouched, matching the n8n tool's "leave unchanged if not mentioned"
-    # instruction.
+    # Only send fields the admin actually mentioned - leave the rest untouched, matching the n8n tool's "leave unchanged if not mentioned" instruction.
     fields = {k: v for k, v in fields.items() if v is not None}
     if not fields:
         return {"error": "No fields provided to update."}
@@ -210,6 +225,39 @@ def generate_seat_row(event_id: str, category: str, seat_row: str, seat_count: i
     return result.data
 
 
+import logging
+logger = logging.getLogger("admin_tools")
+
+def generate_event_description(artist: str, venue: str, event_type: str, date: str, additional_prompt: str = "") -> dict:
+    """Uses Gemini to generate a concise event description.
+
+    The description is also stored in a module-level variable for later use in
+    `update_event` when the admin confirms saving it without explicitly passing
+    the description argument.
+    """
+    prompt = f"""
+Write a concise, engaging event description (≈2‑3 lines, 30‑50 words) for the following details:
+Artist/Show: {artist}
+Venue: {venue}
+Event Type: {event_type}
+Date: {date}
+Additional Context: {additional_prompt}
+
+Include the artist name, venue, date, and a brief highlight of the experience. Avoid exaggerated or unverifiable claims unless explicitly provided in the additional context. Return ONLY the description text without any extra wording.
+"""
+    try:
+        response = _client.models.generate_content(
+            model="gemini-3.6-flash",
+            contents=prompt,
+        )
+        description_text = response.text.strip()
+        # Store for later fallback in update_event
+        global _last_generated_description
+        _last_generated_description = description_text
+        return {"description": description_text}
+    except Exception as e:
+        logger.error(f"Failed to generate description: {str(e)}")
+        return {"error": f"Failed to generate description: {str(e)}"}
 # ---------------------------------------------------------------------------
 # Gemini function declarations (JSON schema) + handler map
 # ---------------------------------------------------------------------------
@@ -241,6 +289,7 @@ FUNCTION_DECLARATIONS = [
                 "image_url": {"type": "string", "description": "New image URL, from an [Uploaded image URL: ...] segment if present."},
                 "latitude": {"type": "string", "description": "New venue latitude, from a [Venue Location: lat,lng] segment if present."},
                 "longitude": {"type": "string", "description": "New venue longitude, from a [Venue Location: lat,lng] segment if present."},
+                "description": {"type": "string", "description": "New event description, typically generated via generate_event_description."},
             },
             "required": ["event_id"],
         },
@@ -423,6 +472,21 @@ FUNCTION_DECLARATIONS = [
             "required": ["event_id", "category", "seat_row", "seat_count"],
         },
     },
+    {
+        "name": "generate_event_description",
+        "description": "Generates a concise 2–3 line event description (≈30-50 words) that is engaging, factual and includes the artist, venue, date, and a brief highlight. Avoid exaggerated or unverifiable claims unless explicitly provided in the additional prompt. After generation, ask the admin for confirmation before calling update_event to save it.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "artist": {"type": "string", "description": "The artist or show name"},
+                "venue": {"type": "string", "description": "The venue name"},
+                "event_type": {"type": "string", "description": "The type of event (Concert, Movie, etc.)"},
+                "date": {"type": "string", "description": "The event date"},
+                "additional_prompt": {"type": "string", "description": "Any extra context or specific instructions from the admin for the description"}
+            },
+            "required": ["artist", "venue", "event_type", "date"]
+        },
+    },
 ]
 
 TOOL_HANDLERS = {
@@ -440,4 +504,5 @@ TOOL_HANDLERS = {
     "get_event_revenue": get_event_revenue,
     "get_refund_list": get_refund_list,
     "update_seats": update_seats,
+    "generate_event_description": generate_event_description,
 }

@@ -61,13 +61,25 @@ async def run_agent(
         system_instruction=system_prompt,
         tools=[tools],
     )
+    
+    executed_calls = set()
 
     for _ in range(MAX_TOOL_ITERATIONS):
-        response = _client.models.generate_content(
-            model=MODEL_NAME,
-            contents=contents,
-            config=config,
-        )
+        try:
+            rough_char_count = len(str(contents))
+            logger.info(f"Gemini API request: Iteration {_}, Context size roughly {rough_char_count} chars")
+            
+            response = _client.models.generate_content(
+                model=MODEL_NAME,
+                contents=contents,
+                config=config,
+            )
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                logger.error(f"Gemini API quota exhausted (429): {err_str}")
+                return "The system is currently experiencing high demand and AI quota is temporarily exhausted. Please try again in a few moments."
+            raise
 
         candidate = response.candidates[0]
         parts = candidate.content.parts or []
@@ -77,8 +89,10 @@ async def run_agent(
             final_text = "".join(p.text for p in parts if p.text)
             return final_text or "Sorry, I couldn't come up with a reply for that."
 
-        # The model's turn (including its function_call part(s)) must be
-        # appended before the function_response turn that answers it.
+        # ALL function responses for this turn go together in ONE user-role
+        # Content, immediately after the model's function-call turn. This
+        # is the exact structure Gemini requires whether the model asked
+        # for one tool call or several at once in the same turn.
         contents.append(candidate.content)
 
         response_parts = []
@@ -86,7 +100,11 @@ async def run_agent(
             handler = tool_handlers.get(fc.name)
             args = dict(fc.args) if fc.args else {}
 
-            if handler is None:
+            call_signature = (fc.name, frozenset(args.items()))
+            if call_signature in executed_calls:
+                logger.warning(f"Model requested duplicate tool in same loop: {fc.name} args={args}")
+                result = {"error": "You already called this tool with these exact arguments in this turn. Use the data from the previous response."}
+            elif handler is None:
                 logger.warning(f"Model requested unknown tool: {fc.name}")
                 result = {"error": f"Unknown tool: {fc.name}"}
             else:
