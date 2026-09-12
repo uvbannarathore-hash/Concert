@@ -145,24 +145,32 @@ export default function ConcertCard({ event, wishlisted = false, onWishlistChang
         <div className="p-5 flex flex-col justify-between flex-grow">
           <div>
             <h3 className="font-display text-2xl tracking-wide group-hover:text-spot transition-colors duration-300 leading-tight relative z-20">
-              <Link 
-                to={`/artists/${event.artist_id}`}
-                onClick={(e) => e.stopPropagation()}
-                className="hover:underline decoration-spot/50 underline-offset-4"
-              >
-                {event.artist_name}
-              </Link>
+              {event.artist_id ? (
+                <Link 
+                  to={`/artists/${event.artist_id}`}
+                  onClick={(e) => e.stopPropagation()}
+                  className="hover:underline decoration-spot/50 underline-offset-4"
+                >
+                  {event.artist_name}
+                </Link>
+              ) : (
+                <span className="cursor-default">{event.artist_name}</span>
+              )}
             </h3>
 
             <p className="text-xs font-semibold text-haze mt-1.5 flex items-center gap-2 flex-wrap relative z-20">
               <span className="flex items-center gap-1">📍 
-                <Link 
-                  to={`/venues/${event.venue_id}`}
-                  onClick={(e) => e.stopPropagation()}
-                  className="hover:underline hover:text-spot2 transition-colors"
-                >
-                  {event.venue_name}
-                </Link>, {event.city}
+                {event.venue_id ? (
+                  <Link 
+                    to={`/venues/${event.venue_id}`}
+                    onClick={(e) => e.stopPropagation()}
+                    className="hover:underline hover:text-spot2 transition-colors"
+                  >
+                    {event.venue_name}
+                  </Link>
+                ) : (
+                  <span className="cursor-default">{event.venue_name}</span>
+                )}, {event.city}
               </span>
               {distanceKm !== null && (
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-white/[0.04] text-spot2 bg-spot2/5">

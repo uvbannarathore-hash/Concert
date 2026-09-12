@@ -148,6 +148,8 @@ export const api = {
     return request(`/concerts${qs ? `?${qs}` : ''}`)
   },
 
+  getRecommendations: () => request('/concerts/recommendations', { auth: true }),
+
   getConcert: (eventId) => request(`/concerts/${eventId}`),
 
   chat: (message) =>
@@ -304,6 +306,14 @@ export const api = {
     return request(`/reviews?${params.toString()}`)
   },
 
+  getReviewSummary: ({ event_id, artist_id, venue_id }) => {
+    const params = new URLSearchParams()
+    if (event_id) params.set('event_id', event_id)
+    if (artist_id) params.set('artist_id', artist_id)
+    if (venue_id) params.set('venue_id', venue_id)
+    return request(`/reviews/summary?${params.toString()}`)
+  },
+
   // Waitlist endpoints
   joinWaitlist: (eventId) => request(`/waitlist/join/${eventId}`, { method: 'POST', auth: true }),
   getWaitlistStatus: (eventId) => request(`/waitlist/status/${eventId}`, { auth: true }),
@@ -312,6 +322,9 @@ export const api = {
   // AI Semantic Search
   semanticSearch: (query) =>
     request('/ai/search', { method: 'POST', body: { query } }),
+
+  // Buy Advice Demand Signal
+  getBuyAdvice: (eventId) => request(`/ai/events/${eventId}/buy-advice`),
 }
 
 export function getPublicPassUrl(bookingId) {

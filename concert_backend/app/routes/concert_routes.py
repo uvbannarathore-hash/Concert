@@ -1,5 +1,7 @@
-from fastapi import APIRouter, HTTPException
+import json
+from fastapi import APIRouter, HTTPException, Depends
 from app.supabase_client import supabase_admin
+from app.auth import get_current_user
 
 router = APIRouter(prefix="/concerts", tags=["concerts"])
 
@@ -27,6 +29,176 @@ def list_concerts(
 
     result = query.execute()
     return {"events": result.data}
+
+
+@router.get("/recommendations")
+def get_recommendations(user: dict = Depends(get_current_user)):
+    """
+    Returns personalized event recommendations based on user's past bookings,
+    wishlist, and positive reviews, using semantic similarity over pre-computed
+    event embeddings.
+    """
+    user_id = user["user_id"]
+    
+    # 1. Fetch booked events (Confirmed & Paid)
+    bookings_res = supabase_admin.table("bookings") \
+        .select("event_id") \
+        .eq("user_id", user_id) \
+        .eq("status", "Confirmed") \
+        .eq("payment_status", "Paid") \
+        .order("created_at", desc=True) \
+        .limit(10) \
+        .execute()
+    booked_event_ids = [b["event_id"] for b in (bookings_res.data or []) if b.get("event_id")]
+    
+    # 2. Fetch wishlist events
+    wishlist_res = supabase_admin.table("wishlist") \
+        .select("event_id") \
+        .eq("user_id", user_id) \
+        .order("added_at", desc=True) \
+        .limit(10) \
+        .execute()
+    wishlist_event_ids = [w["event_id"] for w in (wishlist_res.data or []) if w.get("event_id")]
+    
+    # 3. Fetch positive reviews
+    reviews_res = supabase_admin.table("reviews") \
+        .select("event_id") \
+        .eq("user_id", user_id) \
+        .gte("rating", 4) \
+        .order("created_at", desc=True) \
+        .limit(10) \
+        .execute()
+    review_event_ids = [r["event_id"] for r in (reviews_res.data or []) if r.get("event_id")]
+    
+    # Combine signals into weighted map
+    event_weights = {}
+    for eid in booked_event_ids:
+        event_weights[eid] = event_weights.get(eid, 0) + 3.0
+    for eid in wishlist_event_ids:
+        event_weights[eid] = event_weights.get(eid, 0) + 2.0
+    for eid in review_event_ids:
+        event_weights[eid] = event_weights.get(eid, 0) + 2.5
+        
+    unique_event_ids = list(event_weights.keys())
+    
+    FIELDS = (
+        "event_id, artist_id, artist_name, venue_id, venue_name, city, "
+        "event_date, event_time, event_type, status, image_url, "
+        "latitude, longitude, description, "
+        "ticket_categories(price_inr)"
+    )
+    
+    # If we have signals, build a semantic profile
+    if unique_event_ids:
+        events_res = supabase_admin.table("events") \
+            .select("event_id, embedding") \
+            .in_("event_id", unique_event_ids) \
+            .execute()
+            
+        embeddings_data = events_res.data or []
+        
+        vector_sum = [0.0] * 768
+        total_weight = 0.0
+        
+        for e in embeddings_data:
+            if not e.get("embedding"):
+                continue
+            try:
+                emb_list = json.loads(e["embedding"]) if isinstance(e["embedding"], str) else e["embedding"]
+                if len(emb_list) == 768:
+                    weight = event_weights.get(e["event_id"], 1.0)
+                    for i in range(768):
+                        vector_sum[i] += emb_list[i] * weight
+                    total_weight += weight
+            except Exception:
+                pass
+                
+        if total_weight > 0:
+            centroid = [v / total_weight for v in vector_sum]
+            
+            # Semantic search
+            rpc_result = supabase_admin.rpc(
+                "match_events",
+                {
+                    "query_embedding": centroid,
+                    "match_threshold": 0.5,
+                    "match_count": 20
+                }
+            ).execute()
+            
+            matches = rpc_result.data or []
+            if matches:
+                matched_event_ids = [m["event_id"] for m in matches]
+                
+                # Fetch full event details (excluding embedding)
+                recs_res = supabase_admin.table("events") \
+                    .select(FIELDS) \
+                    .in_("event_id", matched_event_ids) \
+                    .eq("status", "Upcoming") \
+                    .execute()
+                    
+                current_events = {e["event_id"]: e for e in recs_res.data or []}
+                
+                # We don't need a separate query for all_booked_ids if we can just get all user bookings
+                all_booked_res = supabase_admin.table("bookings") \
+                    .select("event_id") \
+                    .eq("user_id", user_id) \
+                    .eq("status", "Confirmed") \
+                    .eq("payment_status", "Paid") \
+                    .execute()
+                all_booked_ids = set(b["event_id"] for b in (all_booked_res.data or []) if b.get("event_id"))
+                
+                ranked_results = []
+                for m in matches:
+                    eid = m["event_id"]
+                    if eid in current_events and eid not in all_booked_ids:
+                        event_data = current_events[eid]
+                        event_data["similarity_score"] = m["similarity"]
+                        ranked_results.append(event_data)
+                        if len(ranked_results) >= 10:
+                            break
+                            
+                if ranked_results:
+                    return {"results": ranked_results}
+                    
+    # Cold start / Fallback
+    try:
+        user_res = supabase_admin.table("users").select("city").eq("user_id", user_id).execute()
+        city = user_res.data[0].get("city") if user_res.data else None
+    except Exception:
+        city = None
+        
+    query = supabase_admin.table("events").select(FIELDS).eq("status", "Upcoming")
+    if city:
+        query = query.eq("city", city)
+    query = query.order("event_date", desc=False).limit(10)
+    
+    fallback_res = query.execute()
+    fallback_events = fallback_res.data or []
+    
+    if not fallback_events and city:
+        # Retry without city
+        fallback_res = supabase_admin.table("events").select(FIELDS).eq("status", "Upcoming").order("event_date", desc=False).limit(10).execute()
+        fallback_events = fallback_res.data or []
+        
+    try:
+        all_booked_res = supabase_admin.table("bookings") \
+            .select("event_id") \
+            .eq("user_id", user_id) \
+            .eq("status", "Confirmed") \
+            .eq("payment_status", "Paid") \
+            .execute()
+        all_booked_ids = set(b["event_id"] for b in (all_booked_res.data or []) if b.get("event_id"))
+    except Exception:
+        all_booked_ids = set()
+        
+    final_fallback = []
+    for e in fallback_events:
+        if e["event_id"] not in all_booked_ids:
+            e["similarity_score"] = 0.0
+            final_fallback.append(e)
+            
+    return {"results": final_fallback[:10]}
 
 
 @router.get("/{event_id}")

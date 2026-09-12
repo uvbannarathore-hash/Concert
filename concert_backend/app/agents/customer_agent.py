@@ -16,6 +16,36 @@ doesn't have artist/venue background info, rather than inventing it.
 from app.supabase_client import supabase_admin
 from app.agents import gemini_loop, memory
 from app.agents.customer_tools import FUNCTION_DECLARATIONS, TOOL_HANDLERS as _BASE_HANDLERS
+import json
+import logging
+from google import genai
+from google.genai import types
+from app.config import GEMINI_API_KEY
+import pydantic
+import re
+
+logger = logging.getLogger("customer_agent")
+
+# Demand query detector
+def _is_demand_query(message: str) -> bool:
+    """Detect if the user is asking about ticket demand or scarcity."""
+    pattern = re.compile(
+        r"""\b(?:
+        demand|high\s+demand|
+        selling\s+(?:fast|quickly|soon|rapidly)|
+        sell\s+(?:fast|quickly|soon)|
+        tickets?\s+(?:left|remaining|available|how\s+many|how\s+many\s+tickets\s+are\s+left)|
+        seats?\s+(?:left|running\s+out)|
+        hurry|
+        buy\s+now|
+        should\s+.*\b(?:buy|book)\b.*\b(?:now|soon)\b|
+        \b(?:book|reserve)\s+.*\bsoon\b
+    )\b""",
+        re.IGNORECASE | re.VERBOSE,
+    )
+    return bool(pattern.search(message))
+
+_client = genai.Client(api_key=GEMINI_API_KEY)
 
 SYSTEM_PROMPT = """You are a friendly and helpful ticket booking assistant, similar to BookMyShow — covering concerts, movies, comedy shows, music shows, plays, and sports events.
 Your job is to answer user questions using the correct tool. You MUST use a tool whenever the user's question requires information from the database. Do not guess or invent information.
@@ -50,8 +80,17 @@ For any event, concert, date, availability, ticket, pricing, or schedule questio
 
 IMPORTANT - multiple showtimes: the same movie/artist can appear MORE THAN ONCE in search_events results at the exact same venue and date, differing only by event_time (e.g. a 7pm show and a separate 9pm show) - these are completely different event_ids with their own independent ticket categories, prices, and seat maps. Each search_events result line includes its event_time - read it carefully. If the user names a specific time ("the 9pm show"), you MUST match the event_id whose event_time corresponds to that, not just the first or only one matching the movie/venue/date. If the user hasn't specified a time and more than one showtime exists for what they asked about, ASK which time before calling get_ticket_categories/get_available_seats/book_ticket_transaction - never guess or default to whichever one appears first.
 
+When presenting event search results, YOU MUST format them as a numbered list and preserve the full `ticket_categories` (category and price) in your text reply so they are saved in the conversation context for price comparisons. DO NOT display the `event_id` to the user in your natural language response. Example:
+1. Arijit Singh at DY Patil Stadium
+   Tickets: VIP - INR 5000, General - INR 2000
+
+If the user later asks to book or asks for details about "the first one" or "the second one", and you need the `event_id` to call a tool like book_ticket_transaction, you must FIRST call `search_events` again using the exact same filters as before to retrieve the correct `event_id` from the tool data.
+
 1b. get_available_seats
 Use AFTER get_ticket_categories, before booking, for events with an interactive seat map (has_seat_map=true - a cinema/stadium with named seats like N5). Tells you exactly which seats are open, row by row, so you can ask the user which ones they want instead of just a quantity. If has_seat_map is false, skip this - just ask how many tickets.
+
+1c. get_buy_advice
+Use when the user asks about ticket demand, if an event is selling fast, if they should buy now or wait, or how many tickets are left for an event. It returns deterministic metrics (% sold, days left, demand level). Do NOT invent demand metrics. Present the returned deterministic message, and caveat that it is based on current demand, not a guaranteed future sellout prediction.
 
 2. Artist biography / venue details / policies
 You do NOT currently have a tool for artist background, genre, popular songs, venue facilities/capacity, or general refund/booking policy questions. If asked about these, say honestly that you don't have that information right now and offer to help with event listings, prices, or bookings instead. Never invent artist biography, venue details, or policy details.
@@ -169,16 +208,99 @@ def _build_bound_handlers(user_id: str, chat_id: str | None) -> dict:
         "book_ticket_transaction": lambda event_id, category, seats=None, seat_numbers=None: _BASE_HANDLERS["book_ticket_transaction"](
             user_id, event_id, category, seats=seats, seat_numbers=seat_numbers, source=source
         ),
-        "get_user_booking_history": lambda: _BASE_HANDLERS["get_user_booking_history"](user_id),
+        "get_user_booking_history": lambda temporal_intent=None, specific_month=None: _BASE_HANDLERS["get_user_booking_history"](user_id, temporal_intent, specific_month),
+        "get_user_hosted_shows": lambda: _BASE_HANDLERS["get_user_hosted_shows"](user_id),
         "cancel_booking": lambda booking_id: _BASE_HANDLERS["cancel_booking"](user_id, booking_id),
         "link_telegram_account": lambda email: _BASE_HANDLERS["link_telegram_account"](chat_id, email),
+        "get_buy_advice": _BASE_HANDLERS["get_buy_advice"],
     }
 
 
+class IntentClassification(pydantic.BaseModel):
+    intent: str
+    context_needed: bool
+
+def classify_intent(message: str, history: list[types.Content]) -> IntentClassification:
+    """
+    Lightweight pre-flight semantic classifier.
+    Determines intent and whether previous conversation context is needed.
+    """
+    prompt = """Classify the user's message into one of the following intents:
+- OUT_OF_DOMAIN: Unrelated general knowledge, jokes, programming questions, weather, etc. Not related to events or bookings.
+- EVENT_SEARCH: Searching for concerts, events, availability, tickets, prices.
+- USER_DATA: Asking about their own bookings, wishlist, or hosted/submitted shows.
+- FOLLOW_UP: A query that clearly references a previous result ("which one", "the cheapest of those").
+- GENERAL_LIVEWIRE: General questions about the platform capabilities.
+
+Set context_needed to true ONLY if the user's query relies on previous conversation (e.g. "Which one is cheaper?", "book the second one").
+If the user's query is a brand new independent search (e.g. "Find Bollywood concerts", "events in Mumbai"), set context_needed to false.
+If there is no recent context provided, context_needed MUST be false.
+"""
+    # Just grab the last couple of turns for context
+    recent_history = ""
+    if history:
+        for turn in history[-4:]:
+            role = turn.role
+            text = turn.parts[0].text if turn.parts else ""
+            recent_history += f"{role}: {text}\n"
+    else:
+        recent_history = "None (this is the first message)"
+
+    try:
+        res = _client.models.generate_content(
+            model="gemini-3.1-flash-lite",
+            contents=[
+                types.Content(role="user", parts=[
+                    types.Part.from_text(text=f"{prompt}\n\nRecent context:\n{recent_history}\n\nUser Message: {message}")
+                ])
+            ],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=IntentClassification,
+            )
+        )
+        data = json.loads(res.text)
+        logger.info(f"Classifier result: {data}")
+        return IntentClassification(**data)
+    except Exception as e:
+        logger.error(f"Intent classification failed: {e}")
+        # Default fallback if classifier fails
+        return IntentClassification(intent="EVENT_SEARCH", context_needed=True)
+
+
 async def _run(effective_user_id: str, session_id: str, name: str, is_admin: bool, message: str, chat_id: str | None) -> str:
-    enriched_message = f"[User name: {name}] [User is_admin: {is_admin}] {message}"
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    current_date_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    enriched_message = f"[Current Date (Asia/Kolkata): {current_date_str}] [User name: {name}] [User is_admin: {is_admin}] {message}"
 
     history = memory.load_history("customer", effective_user_id, session_id)
+    
+    # Pre-flight intent classification
+    classification = classify_intent(message, history)
+
+
+    # Demand query detection – treat as FOLLOW_UP with context_needed=True
+    if _is_demand_query(message):
+        logger.info("Demand query detected – forcing FOLLOW_UP with context_needed=True")
+        classification = IntentClassification(intent="FOLLOW_UP", context_needed=True)
+
+    # Ordinal reference handling – keep only the most recent search result for accurate event resolution
+    if re.search(r"\b(first|second|third|fourth|fifth)\b", message, re.IGNORECASE):
+        if len(history) >= 2:
+            history = history[-2:]
+            logger.info("Ordinal reference detected – trimmed history to recent turns for event resolution")
+        else:
+            logger.info("Ordinal reference detected – insufficient history to trim.")
+
+    if not classification.context_needed:
+        if history:
+            logger.info("Context not needed but prior history exists – retaining it for potential follow‑up.")
+        else:
+            logger.info("Context not needed. Dropping history for this request.")
+            history = []
+
     handlers = _build_bound_handlers(effective_user_id, chat_id)
 
     reply = await gemini_loop.run_agent(

@@ -16,6 +16,14 @@ class SearchRequest(BaseModel):
 class SearchResponse(BaseModel):
     results: List[dict]
 
+@router.get("/events/{event_id}/buy-advice")
+def get_buy_advice_endpoint(event_id: str):
+    from app.services.demand_service import get_buy_advice
+    result = get_buy_advice(event_id)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
 @router.post("/search", response_model=SearchResponse)
 def search_events(request: SearchRequest):
     query = request.query.strip()

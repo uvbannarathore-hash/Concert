@@ -68,3 +68,4 @@ pydub==0.25.1
 # (`from livekit import api`) - it does NOT need the full livekit-agents /
 # livekit-plugins-* stack, those belong only to the separate voice worker
 # service (see requirements-voice-agent.txt).
+slowapi

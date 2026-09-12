@@ -7,6 +7,8 @@ export default function ReviewList({ eventId, artistId, venueId }) {
   const [totalReviews, setTotalReviews] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [aiSummary, setAiSummary] = useState(null)
+  const [aiLoading, setAiLoading] = useState(false)
 
   useEffect(() => {
     async function load() {
@@ -16,6 +18,22 @@ export default function ReviewList({ eventId, artistId, venueId }) {
         setReviews(data.reviews || [])
         setAverageRating(data.average_rating || 0)
         setTotalReviews(data.total_reviews || 0)
+        
+        // Fetch AI summary if there are enough text reviews
+        const textReviews = data.reviews?.filter(r => r.review_text && r.review_text.trim()) || []
+        if (textReviews.length >= 2) {
+          try {
+            setAiLoading(true)
+            const summaryData = await api.getReviewSummary({ event_id: eventId, artist_id: artistId, venue_id: venueId })
+            if (summaryData && summaryData.summary_text) {
+              setAiSummary(summaryData.summary_text)
+            }
+          } catch (e) {
+            console.error("Failed to load AI summary", e)
+          } finally {
+            setAiLoading(false)
+          }
+        }
       } catch (err) {
         setError(err.message)
       } finally {
@@ -57,6 +75,23 @@ export default function ReviewList({ eventId, artistId, venueId }) {
           </div>
         </div>
       </div>
+
+      {aiSummary && (
+        <div className="p-4 rounded-xl border border-spot/20 bg-spot/5">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-sm font-semibold text-spot">✨ AI Summary</span>
+          </div>
+          <p className="text-sm text-haze leading-relaxed font-body">
+            {aiSummary}
+          </p>
+        </div>
+      )}
+
+      {aiLoading && !aiSummary && (
+        <div className="p-4 rounded-xl border border-white/[0.04] bg-white/[0.01]">
+          <div className="text-xs font-mono text-haze animate-pulse">Generating ✨ AI Summary...</div>
+        </div>
+      )}
 
       {/* List */}
       <div className="space-y-4">

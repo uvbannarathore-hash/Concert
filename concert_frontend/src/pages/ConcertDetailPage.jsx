@@ -71,6 +71,7 @@ export default function ConcertDetailPage() {
   const [appliedCoupon, setAppliedCoupon] = useState(null)
   const [couponError, setCouponError] = useState('')
   const [couponLoading, setCouponLoading] = useState(false)
+  const [buyAdvice, setBuyAdvice] = useState(null)
 
   useEffect(() => {
     setAppliedCoupon(null)
@@ -88,7 +89,9 @@ export default function ConcertDetailPage() {
         // Save to recently viewed
         try {
           if (data.event && data.event.event_id) {
-            const currentStr = localStorage.getItem('recentlyViewedEvents')
+            const uid = localStorage.getItem('user_id')
+            const storageKey = uid ? `recentlyViewedEvents_${uid}` : 'recentlyViewedEvents'
+            const currentStr = localStorage.getItem(storageKey)
             let current = []
             if (currentStr) {
               current = JSON.parse(currentStr)
@@ -99,19 +102,22 @@ export default function ConcertDetailPage() {
             // Add to front
             current.unshift({
               event_id: data.event.event_id,
+              artist_id: data.event.artist_id,
               artist_name: data.event.artist_name,
+              venue_id: data.event.venue_id,
               venue_name: data.event.venue_name,
               image_url: data.event.image_url,
               city: data.event.city,
               event_date: data.event.event_date,
-              event_time: data.event.event_time
+              event_time: data.event.event_time,
+              event_type: data.event.event_type
             })
             // Keep max 10
             if (current.length > 10) current = current.slice(0, 10)
-            localStorage.setItem('recentlyViewedEvents', JSON.stringify(current))
+            localStorage.setItem(storageKey, JSON.stringify(current))
           }
         } catch (e) {
-          console.warn('Could not save to recentlyViewedEvents', e)
+          console.warn('Could not save to recently viewed events', e)
         }
       })
       .catch((err) => setError(err.message))
@@ -126,6 +132,14 @@ export default function ConcertDetailPage() {
          .then((res) => setWaitlistJoined(res.joined))
          .catch(() => {})
     }
+
+    api.getBuyAdvice(eventId)
+       .then(data => {
+         if (data && !data.error && data.demand_level && !['Sold Out', 'Cancelled', 'Completed', 'Past', 'Unknown'].includes(data.demand_level)) {
+           setBuyAdvice(data)
+         }
+       })
+       .catch(() => {})
   }, [eventId])
 
   const hasSeatMap = seatMap?.has_seat_map === true
@@ -625,6 +639,28 @@ export default function ConcertDetailPage() {
 
         {/* Right Column: Ticket categories select (or seat-map summary) */}
         <div className="md:col-span-5 space-y-6">
+          {buyAdvice && (
+            <div className={`p-4 rounded-xl border ${
+              buyAdvice.demand_level === 'High' ? 'bg-red-500/10 border-red-500/30 text-red-200' :
+              buyAdvice.demand_level === 'Medium' ? 'bg-amber-500/10 border-amber-500/30 text-amber-200' :
+              'bg-blue-500/10 border-blue-500/30 text-blue-200'
+            }`}>
+              <div className="flex items-center gap-2 mb-2">
+                <span className={`text-[10px] uppercase font-mono font-bold px-2 py-0.5 rounded ${
+                  buyAdvice.demand_level === 'High' ? 'bg-red-500 text-white' :
+                  buyAdvice.demand_level === 'Medium' ? 'bg-amber-500 text-black' :
+                  'bg-blue-500 text-white'
+                }`}>
+                  {buyAdvice.demand_level} Demand
+                </span>
+                <span className="text-xs font-mono opacity-80">
+                  {buyAdvice.sold_percentage}% sold · {buyAdvice.available_seats} left · {buyAdvice.days_left} days left
+                </span>
+              </div>
+              <p className="text-sm opacity-90">{buyAdvice.message}</p>
+            </div>
+          )}
+
           <div className="bg-stage/20 border border-white/[0.04] p-6 rounded-2xl">
             {event.status === 'Sold Out' ? (
               <div className="text-center py-6">

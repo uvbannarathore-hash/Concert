@@ -40,8 +40,8 @@ from app.voice_agent import voice_db
 # Tool implementations
 # ---------------------------------------------------------------------------
 
-def search_events(query: str = None, city: str = None) -> dict:
-    return voice_db.search_events(query, city)
+def search_events(query: str = None, city: str = None, temporal_intent: str = None, specific_month: int = None, status: str = None) -> dict:
+    return voice_db.search_events(query, city, temporal_intent, specific_month, status)
 
 
 def get_ticket_categories(event_id: str) -> dict:
@@ -57,8 +57,15 @@ def book_ticket_transaction(user_id: str, event_id: str, category: str, seats: i
     return voice_db.book_ticket_for_user(user_id, event_id, category, seats=seats, seat_numbers=seat_numbers, source=source)
 
 
-def get_user_booking_history(user_id: str) -> dict:
-    return voice_db.get_booking_status_for_user(user_id)
+def get_user_booking_history(user_id: str, temporal_intent: str = None, specific_month: int = None) -> dict:
+    return voice_db.get_booking_status_for_user(user_id, temporal_intent, specific_month)
+
+def get_buy_advice(event_id: str) -> dict:
+    from app.services.demand_service import get_buy_advice as service_get_buy_advice
+    return service_get_buy_advice(event_id)
+
+def get_user_hosted_shows(user_id: str) -> dict:
+    return voice_db.get_user_hosted_shows(user_id)
 
 
 def cancel_booking(user_id: str, booking_id: str) -> dict:
@@ -96,6 +103,20 @@ FUNCTION_DECLARATIONS = [
             "properties": {
                 "query": {"type": "string", "description": "Artist or event name to search for, e.g. 'Arijit Singh'. Leave empty to just filter by city."},
                 "city": {"type": "string", "description": "City to filter by, e.g. 'Mumbai'. Optional."},
+                "temporal_intent": {
+                    "type": "string",
+                    "description": "Optional temporal constraint inferred from the user query.",
+                    "enum": ["TODAY", "TOMORROW", "THIS_WEEK", "THIS_WEEKEND", "NEXT_WEEK", "NEXT_WEEKEND", "THIS_MONTH", "NEXT_MONTH", "ALL"]
+                },
+                "specific_month": {
+                    "type": "integer",
+                    "description": "Optional specific month number (1-12) if the user asks for a specific month like 'December'. Only use if a specific month is named."
+                },
+                "status": {
+                    "type": "string",
+                    "description": "Optional status filter. If the user explicitly asks for 'Sold Out' concerts, pass 'Sold Out'. Otherwise, leave empty to search upcoming available events.",
+                    "enum": ["Upcoming", "Sold Out"]
+                }
             },
         },
     },
@@ -164,7 +185,27 @@ FUNCTION_DECLARATIONS = [
         "description": "The source of truth for the user's own previous bookings and booking "
         "history. Use this whenever the user asks about previous bookings, booking history, what "
         "they booked before, or their past concerts. NEVER answer these from conversation memory "
-        "- always use this tool.",
+        "- always use this tool. The tool response will tell you the exact total count of matching bookings. Never infer the total count just by looking at the returned array, use the total_count field.",
+        "parameters": {
+            "type": "object", 
+            "properties": {
+                "temporal_intent": {
+                    "type": "string",
+                    "description": "Optional temporal constraint inferred from the user query.",
+                    "enum": ["TODAY", "TOMORROW", "THIS_WEEK", "THIS_WEEKEND", "NEXT_WEEK", "NEXT_WEEKEND", "THIS_MONTH", "NEXT_MONTH", "ALL"]
+                },
+                "specific_month": {
+                    "type": "integer",
+                    "description": "Optional specific month number (1-12) if the user asks for a specific month like 'December'. Only use if a specific month is named."
+                }
+            }
+        },
+    },
+    {
+        "name": "get_user_hosted_shows",
+        "description": "Use this whenever the user asks about shows they have hosted, submitted, or listed. "
+        "This tool is the source of truth for the user's own hosted/submitted shows. NEVER invent or infer "
+        "this from conversation memory.",
         "parameters": {"type": "object", "properties": {}},
     },
     {
@@ -197,6 +238,17 @@ FUNCTION_DECLARATIONS = [
             "required": ["email"],
         },
     },
+    {
+        "name": "get_buy_advice",
+        "description": "Use this to get the deterministic 'buy now vs wait' demand signal for a specific event. Returns % sold, days left, and urgency level. NEVER invent these metrics yourself.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string", "description": "The event ID."},
+            },
+            "required": ["event_id"],
+        },
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -209,6 +261,8 @@ TOOL_HANDLERS = {
     "get_available_seats": get_available_seats,
     "book_ticket_transaction": book_ticket_transaction,
     "get_user_booking_history": get_user_booking_history,
+    "get_user_hosted_shows": get_user_hosted_shows,
     "cancel_booking": cancel_booking,
     "link_telegram_account": link_telegram_account,
+    "get_buy_advice": get_buy_advice,
 }

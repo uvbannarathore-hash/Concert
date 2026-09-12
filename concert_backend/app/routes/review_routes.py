@@ -95,10 +95,35 @@ def create_review(payload: CreateReviewRequest, current_user: dict = Depends(get
             "rating": payload.rating,
             "review_text": payload.review_text
         }).execute()
+        
+        # Invalidate cache if review has text
+        if payload.review_text and payload.review_text.strip():
+            from app.services.summarization_service import invalidate_summary_cache
+            invalidate_summary_cache(payload.event_id)
+            
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to submit review: {str(e)}")
 
     return {"message": "Review submitted successfully."}
+
+@router.get("/summary")
+def get_review_summary_api(
+    event_id: str | None = Query(None),
+    artist_id: str | None = Query(None),
+    venue_id: str | None = Query(None)
+):
+    from app.services.summarization_service import get_review_summary
+    
+    provided = [bool(x) for x in [event_id, artist_id, venue_id]]
+    if sum(provided) != 1:
+        raise HTTPException(status_code=400, detail="Provide exactly ONE of: event_id, artist_id, venue_id")
+        
+    if event_id:
+        return get_review_summary("event", event_id)
+    elif artist_id:
+        return get_review_summary("artist", artist_id)
+    elif venue_id:
+        return get_review_summary("venue", venue_id)
 
 
 @router.get("")

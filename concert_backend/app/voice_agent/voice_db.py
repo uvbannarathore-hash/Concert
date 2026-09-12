@@ -12,7 +12,8 @@ import logging
 import time
 import uuid
 import razorpay
-from datetime import date
+from datetime import date, datetime, timedelta
+from calendar import monthrange
 from zoneinfo import ZoneInfo
 from app.supabase_client import supabase_admin
 from app.config import RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET
@@ -20,6 +21,75 @@ from app.config import RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET
 logger = logging.getLogger("voice_db")
 
 razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+
+def resolve_temporal_intent(intent: str | None, specific_month: int | None = None) -> tuple[str | None, str | None]:
+    """
+    Resolves temporal intents into deterministic ISO string bounds [start, end)
+    using the Asia/Kolkata timezone.
+    """
+    now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    start_date = None
+    end_date = None
+    
+    if specific_month:
+        y = now.year
+        if specific_month < now.month:
+            y += 1
+        start_date = datetime(y, specific_month, 1).date()
+        _, last_day = monthrange(y, specific_month)
+        end_date = start_date + timedelta(days=last_day)
+        return start_date.isoformat(), end_date.isoformat()
+
+    if not intent or intent == "ALL":
+        return None, None
+        
+    today = now.date()
+    
+    if intent == "TODAY":
+        start_date = today
+        end_date = today + timedelta(days=1)
+    elif intent == "TOMORROW":
+        start_date = today + timedelta(days=1)
+        end_date = start_date + timedelta(days=1)
+    elif intent == "THIS_WEEK":
+        # Monday to Sunday
+        start_date = today - timedelta(days=today.weekday())
+        end_date = start_date + timedelta(days=7)
+    elif intent == "THIS_WEEKEND":
+        # Saturday to Sunday
+        saturday = today + timedelta(days=(5 - today.weekday()))
+        if today.weekday() >= 5: # If it's already weekend, weekend is this Saturday
+            saturday = today - timedelta(days=(today.weekday() - 5))
+        start_date = saturday
+        end_date = saturday + timedelta(days=2)
+    elif intent == "NEXT_WEEKEND":
+        saturday = today + timedelta(days=(5 - today.weekday()))
+        if today.weekday() >= 5:
+            saturday = today - timedelta(days=(today.weekday() - 5))
+        saturday = saturday + timedelta(days=7)
+        start_date = saturday
+        end_date = saturday + timedelta(days=2)
+    elif intent == "NEXT_WEEK":
+        start_date = today + timedelta(days=(7 - today.weekday()))
+        end_date = start_date + timedelta(days=7)
+    elif intent == "THIS_MONTH":
+        start_date = today.replace(day=1)
+        _, last_day = monthrange(today.year, today.month)
+        end_date = start_date + timedelta(days=last_day)
+    elif intent == "NEXT_MONTH":
+        y, m = today.year, today.month
+        if m == 12:
+            y += 1
+            m = 1
+        else:
+            m += 1
+        start_date = today.replace(year=y, month=m, day=1)
+        _, last_day = monthrange(y, m)
+        end_date = start_date + timedelta(days=last_day)
+        
+    if start_date and end_date:
+        return start_date.isoformat(), end_date.isoformat()
+    return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -72,18 +142,58 @@ def find_or_create_user_by_phone(phone: str, name: str | None = None) -> dict:
 # Event/ticket lookup — caller won't know an event_id, so search is
 # name/city driven, like the Admin Agent's list_events tool.
 # ---------------------------------------------------------------------------
-def search_events(query: str | None = None, city: str | None = None) -> dict:
-    """Searches upcoming events by artist/event name and/or city."""
-    today = date.today().isoformat()
+def search_events(query: str | None = None, city: str | None = None, temporal_intent: str | None = None, specific_month: int | None = None, status_filter: str | None = None) -> dict:
+    """Searches upcoming events by artist/event name, city, and temporal constraint."""
+    from app.services.embedding_service import generate_query_embedding
+    today = datetime.now(ZoneInfo("Asia/Kolkata")).date().isoformat()
+    
+    start_date, end_date = resolve_temporal_intent(temporal_intent, specific_month)
+    
+    candidate_ids: list[str] | None = None
+    similarity_rank: dict[str, float] = {}
+    
+    if query:
+        # If the query is literally "sold out" or similar, the AI might pass it. 
+        # But we still run it through pgvector just in case there's semantic meaning.
+        embedding = generate_query_embedding(query)
+        if embedding:
+            rpc = supabase_admin.rpc(
+                "match_events",
+                {"query_embedding": embedding, "match_threshold": 0.6, "match_count": 20},
+            ).execute()
+            if rpc.data:
+                candidate_ids = [m["event_id"] for m in rpc.data]
+                similarity_rank = {m["event_id"]: m["similarity"] for m in rpc.data}
+            else:
+                candidate_ids = []
+
+    if candidate_ids is not None and len(candidate_ids) == 0:
+        return {
+            "success": False,
+            "message": f"No upcoming events found matching '{query}'.",
+        }
 
     q = (
         supabase_admin
         .table("events")
         .select(
-            "event_id, artist_name, venue_name, city, event_date, event_time, event_type"
+            "event_id, artist_name, venue_name, city, event_date, event_time, "
+            "event_type, status, ticket_categories(category, price_inr)"
         )
-        .gte("event_date", today)
     )
+
+    if status_filter:
+        q = q.eq("status", status_filter)
+    else:
+        q = q.in_("status", ["Upcoming", "Sold Out"])
+
+    if candidate_ids is not None:
+        q = q.in_("event_id", candidate_ids)
+
+    if start_date and end_date:
+        q = q.gte("event_date", start_date).lt("event_date", end_date)
+    else:
+        q = q.gte("event_date", today)
 
     if city:
         q = q.eq("city", city)
@@ -92,34 +202,34 @@ def search_events(query: str | None = None, city: str | None = None) -> dict:
 
     rows = result.data or []
 
-    if query:
-        needle = query.strip().lower()
-        rows = [
-            r for r in rows
-            if needle in (r.get("artist_name") or "").lower()
-        ]
-
     if not rows:
+        qualifier = " ".join(filter(None, [query, city]))
         return {
             "success": False,
-            "message": f"No upcoming events found matching '{query or city}'."
+            "message": f"No upcoming events found{f' matching {qualifier!r}' if qualifier else ''}."
         }
 
-    # Same movie/artist can have multiple showtimes at the same venue on
-    # the same date (e.g. a 7pm and a 9pm show) - these are DIFFERENT
-    # event_ids with different seat/pricing data. event_time MUST be
-    # shown here, or a caller asking for a specific showtime (e.g. "the
-    # 9pm show") gives the LLM nothing to match against, and it can
-    # silently pick the wrong one.
-    lines = [
-        f"{r['artist_name']} at {r['venue_name']}, {r['city']} "
-        f"on {r['event_date']} at {r.get('event_time', 'time TBA')} (event_id: {r['event_id']})"
-        for r in rows
-    ]
+    # Re-apply similarity ranking so results stay most-relevant-first.
+    if similarity_rank:
+        rows.sort(key=lambda r: similarity_rank.get(r["event_id"], 0.0), reverse=True)
+    else:
+        rows.sort(key=lambda r: r["event_date"])
+
+    lines = []
+    for r in rows:
+        cats = r.get("ticket_categories") or []
+        cat_details = ", ".join(f"{c['category']}: INR {c['price_inr']:,.0f}" for c in cats if c.get("price_inr") is not None)
+        price_str = f"[{cat_details}]" if cat_details else "price TBA"
+        status_tag = " [SOLD OUT]" if r.get("status") == "Sold Out" else ""
+        lines.append(
+            f"{r['artist_name']} at {r['venue_name']}, {r['city']} "
+            f"on {r['event_date']} at {r.get('event_time', 'time TBA')}{status_tag} "
+            f"| Tickets: {price_str} (event_id: {r['event_id']})"
+        )
 
     return {
         "success": True,
-        "message": "Found these upcoming events:\n" + "\n".join(lines),
+        "message": "Found these events:\n" + "\n".join(lines),
         "events": rows,
     }
 
@@ -489,25 +599,49 @@ def get_booking_status(caller_phone: str) -> dict:
     return get_booking_status_for_user(user.data[0]["user_id"])
 
 
-def get_booking_status_for_user(user_id: str) -> dict:
+def get_booking_status_for_user(user_id: str, temporal_intent: str | None = None, specific_month: int | None = None) -> dict:
     """Website STS flow: looks up recent bookings directly by the authenticated user_id."""
-    bookings = (
+    start_date, end_date = resolve_temporal_intent(temporal_intent, specific_month)
+    
+    q = (
         supabase_admin.table("bookings")
-        .select("booking_id, event_id, category, seats_booked, status, payment_status, events(artist_name, event_date)")
+        .select("booking_id, event_id, category, seats_booked, status, payment_status, events!inner(artist_name, event_date)", count="exact")
         .eq("user_id", user_id)
-        .order("created_at", desc=True)
-        .limit(5)
-        .execute()
     )
+    
+    if start_date and end_date:
+        q = q.gte("events.event_date", start_date).lt("events.event_date", end_date)
+        
+    bookings = q.order("created_at", desc=True).limit(10).execute()
+    
     if not bookings.data:
-        return {"success": False, "message": "No bookings found for this account."}
+        return {"success": False, "message": "No bookings found for this account matching the criteria.", "total_count": 0, "returned_count": 0, "has_more": False}
 
     lines = [
-        f"{b['booking_id']}: {b.get('events', {}).get('artist_name', 'Event')} — "
+        f"{b['booking_id']}: {b.get('events', {}).get('artist_name', 'Event')} (Event Date: {b.get('events', {}).get('event_date')}) — "
         f"{b['category']} x{b['seats_booked']}, status: {b['status']} ({b['payment_status']})"
         for b in bookings.data
     ]
-    return {"success": True, "message": "Recent bookings:\n" + "\n".join(lines)}
+    
+    total_count = bookings.count if bookings.count is not None else len(bookings.data)
+    returned_count = len(bookings.data)
+    has_more = total_count > returned_count
+    
+    msg = f"Found {total_count} matching booking(s)."
+    if has_more:
+        msg += f" Showing the {returned_count} most recent ones:"
+    else:
+        msg += ":"
+    msg += "\n" + "\n".join(lines)
+        
+    return {
+        "success": True, 
+        "message": msg,
+        "total_count": total_count,
+        "returned_count": returned_count,
+        "has_more": has_more,
+        "bookings": bookings.data
+    }
 
 
 def cancel_booking(caller_phone: str, booking_id: str) -> dict:
@@ -533,6 +667,26 @@ def cancel_booking_for_user(user_id: str, booking_id: str) -> dict:
         return {"success": False, "message": "Booking not found, or it doesn't belong to this account."}
 
     return {"success": True, "message": f"Booking {booking_id} has been cancelled."}
+
+def get_user_hosted_shows(user_id: str) -> dict:
+    """Website/Telegram STS flow: looks up the user's submitted/hosted shows from show_submissions."""
+    result = (
+        supabase_admin.table("show_submissions")
+        .select("artist_name, venue_name, event_date, status")
+        .eq("submitted_by_user_id", user_id)
+        .order("created_at", desc=True)
+        .limit(10)
+        .execute()
+    )
+    
+    if not result.data:
+        return {"success": False, "message": "You haven't hosted or submitted any shows yet."}
+
+    lines = [
+        f"Show: {row.get('artist_name')} at {row.get('venue_name')} on {row.get('event_date')} (Status: {row.get('status')})"
+        for row in result.data
+    ]
+    return {"success": True, "message": "Your hosted shows:\n" + "\n".join(lines)}
 
 
 # ---------------------------------------------------------------------------

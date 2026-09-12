@@ -48,6 +48,8 @@ export default function HomePage() {
   const [aiSearchResults, setAiSearchResults] = useState([])
   const [aiSearchLoading, setAiSearchLoading] = useState(false)
   const [aiSearchError, setAiSearchError] = useState('')
+  const [recommendations, setRecommendations] = useState([])
+  const [loadingRecommendations, setLoadingRecommendations] = useState(false)
 
   // Carousel State
   const [currentSlide, setCurrentSlide] = useState(0)
@@ -66,19 +68,26 @@ export default function HomePage() {
       () => {},
       { timeout: 8000 }
     )
+  }, [])
 
+  useEffect(() => {
     try {
-      const stored = localStorage.getItem('recentlyViewedEvents')
+      const uid = localStorage.getItem('user_id')
+      const storageKey = uid ? `recentlyViewedEvents_${uid}` : 'recentlyViewedEvents'
+      const stored = localStorage.getItem(storageKey)
       if (stored) {
         const parsed = JSON.parse(stored)
         if (Array.isArray(parsed)) {
           setRecentlyViewed(parsed.filter(e => e && e.event_id))
         }
+      } else {
+        setRecentlyViewed([])
       }
     } catch (e) {
       console.warn('Failed to parse recentlyViewedEvents', e)
+      setRecentlyViewed([])
     }
-  }, [])
+  }, [profile])
 
   useEffect(() => {
     setLoading(true)
@@ -92,6 +101,11 @@ export default function HomePage() {
   useEffect(() => {
     if (api.isLoggedIn()) {
       api.myProfile().then(setProfile).catch(() => {})
+      setLoadingRecommendations(true)
+      api.getRecommendations()
+        .then((data) => setRecommendations(data.results || []))
+        .catch((err) => console.warn('Failed to load recommendations', err))
+        .finally(() => setLoadingRecommendations(false))
     }
   }, [])
 
@@ -292,15 +306,62 @@ export default function HomePage() {
         </div>
       </section>
 
+      {/* Recommended For You Section */}
+      {api.isLoggedIn() && !searchQuery && (
+        <section className="max-w-6xl mx-auto px-6 pt-10 pb-4">
+          <h2 className="font-display text-2xl tracking-wide uppercase text-paper mb-6">Recommended For You</h2>
+          {loadingRecommendations ? (
+            <div className="flex gap-6 overflow-x-auto pb-4 scrollbar-none snap-x snap-mandatory">
+              {[1, 2, 3].map((n) => (
+                <div key={n} className="min-w-[280px] max-w-[280px] snap-start flex-shrink-0 animate-pulse">
+                  <div className="border border-white/[0.04] bg-stage2/20 rounded-2xl h-80 flex flex-col justify-between p-5">
+                    <div className="bg-stage2/60 h-40 rounded-xl w-full"></div>
+                    <div className="space-y-2 mt-4">
+                      <div className="bg-stage2/60 h-6 rounded w-3/4"></div>
+                      <div className="bg-stage2/60 h-4 rounded w-1/2"></div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (() => {
+            const filteredRecommendations = recommendations.filter(e => !eventType || e.event_type === eventType)
+            const groupedRecommendations = groupEvents(filteredRecommendations)
+            if (groupedRecommendations.length === 0) {
+              return <p className="text-sm text-haze">No recommendations for this category.</p>
+            }
+            return (
+              <div className="flex gap-6 overflow-x-auto pb-4 scrollbar-none snap-x snap-mandatory">
+                {groupedRecommendations.map((e) => (
+                  <div key={e.event_id} className="min-w-[280px] max-w-[280px] snap-start flex-shrink-0">
+                    <ConcertCard event={e} />
+                  </div>
+                ))}
+              </div>
+            )
+          })()}
+        </section>
+      )}
+
       {/* Recently Viewed Section */}
       {(() => {
         const validRecentlyViewed = recentlyViewed
           .map(e => {
             const liveEvent = events.find(ev => ev.event_id === e.event_id)
-            if (!liveEvent) return null;
-            return { ...e, status: liveEvent.status, showtimes: [] }
+            const enriched = {
+              ...e,
+              artist_id: e.artist_id || liveEvent?.artist_id,
+              venue_id: e.venue_id || liveEvent?.venue_id,
+              event_type: e.event_type || liveEvent?.event_type,
+              status: liveEvent ? liveEvent.status : (e.status || 'Upcoming'),
+              showtimes: []
+            }
+            return enriched
           })
-          .filter(Boolean)
+          .filter(e => {
+            if (eventType && e.event_type && e.event_type !== eventType) return false
+            return true
+          })
 
         if (validRecentlyViewed.length === 0 || searchQuery) return null;
 
