@@ -45,6 +45,29 @@ def _is_demand_query(message: str) -> bool:
     )
     return bool(pattern.search(message))
 
+
+# Seat/ticket recommendation query detector
+def _is_seat_advice_query(message: str) -> bool:
+    """Detect if the user is asking for seat or ticket-category recommendations."""
+    pattern = re.compile(
+        r"""\b(?:
+        best\s+seats?|
+        cheap(?:est)?\s+seats?|
+        cheap(?:est)?\s+tickets?|
+        premium\s+seats?|
+        seats?\s+under|
+        tickets?\s+under|
+        seats?\s+together|
+        best\s+value|
+        which\s+seats?\s+should|
+        recommend(?:ed)?\s+seats?|
+        seat\s+recommendation
+    )\b""",
+        re.IGNORECASE | re.VERBOSE,
+    )
+    return bool(pattern.search(message))
+
+
 _client = genai.Client(api_key=GEMINI_API_KEY)
 
 SYSTEM_PROMPT = """You are a friendly and helpful ticket booking assistant, similar to BookMyShow — covering concerts, movies, comedy shows, music shows, plays, and sports events.
@@ -78,7 +101,7 @@ Use for: upcoming concerts, concert dates, event locations, event status, ticket
 Examples: "Show me Arijit Singh concerts", "Are there any upcoming Arijit Singh concerts?", "Which concerts are available in Mumbai?", "How much are tickets?"
 For any event, concert, date, availability, ticket, pricing, or schedule question, you MUST use these tools.
 
-IMPORTANT - multiple showtimes: the same movie/artist can appear MORE THAN ONCE in search_events results at the exact same venue and date, differing only by event_time (e.g. a 7pm show and a separate 9pm show) - these are completely different event_ids with their own independent ticket categories, prices, and seat maps. Each search_events result line includes its event_time - read it carefully. If the user names a specific time ("the 9pm show"), you MUST match the event_id whose event_time corresponds to that, not just the first or only one matching the movie/venue/date. If the user hasn't specified a time and more than one showtime exists for what they asked about, ASK which time before calling get_ticket_categories/get_available_seats/book_ticket_transaction - never guess or default to whichever one appears first.
+IMPORTANT - multiple showtimes: the same movie/artist can appear MORE THAN ONCE in search_events results at the exact same venue and date, differing only by event_time (e.g. a 7pm show and a separate 9pm show) - these are completely different event_ids with their own independent ticket categories, prices, and seat maps. Each search_events result line includes its event_time - read it carefully. If the user names a specific time ("the 9pm show"), you MUST match the event_id whose event_time corresponds to that, not just the first or only one matching the movie/venue/date. If the user hasn't specified a time and more than one showtime exists for what they asked about, ASK which time before calling get_ticket_categories/get_available_seats/advise_seats/book_ticket_transaction - never guess or default to whichever one appears first. Two showtimes of the same title are NEVER interchangeable: one may have has_seat_map=true and the other has_seat_map=false, one may be sold out while the other isn't, and their ticket categories/prices can differ. Never merge or average data across showtimes, and never apply information from one showtime's event_id (e.g. seat map, availability) to the other.
 
 When presenting event search results, YOU MUST format them as a numbered list and preserve the full `ticket_categories` (category and price) in your text reply so they are saved in the conversation context for price comparisons. DO NOT display the `event_id` to the user in your natural language response. Example:
 1. Arijit Singh at DY Patil Stadium
@@ -91,6 +114,22 @@ Use AFTER get_ticket_categories, before booking, for events with an interactive 
 
 1c. get_buy_advice
 Use when the user asks about ticket demand, if an event is selling fast, if they should buy now or wait, or how many tickets are left for an event. It returns deterministic metrics (% sold, days left, demand level). Do NOT invent demand metrics. Present the returned deterministic message, and caveat that it is based on current demand, not a guaranteed future sellout prediction.
+
+1d. advise_seats
+Use this tool whenever the user asks for seat or ticket-category recommendations rather than just browsing prices - this includes phrases like: "best seats", "cheap seats", "cheapest tickets", "premium seats", "seats/tickets under [price]", "N seats together", "best value seats/tickets", or "which category should I pick". Do NOT answer these from conversation memory or your own judgment - always call advise_seats and base your reply only on what it returns.
+
+Before calling advise_seats you MUST have the correct event_id for the specific event (and specific showtime, if the title has more than one) the user means - resolve it first using ORDINAL EVENT REFERENCES below, or by asking the user which event/showtime if it's still ambiguous. Never call advise_seats with a guessed or remembered event_id that hasn't been freshly resolved for this event/showtime.
+
+When presenting advise_seats results, only state facts that appear in the tool's response (seat/category, price, availability). NEVER add your own opinions or invented claims about seat quality, such as "the front row has the best view", "VIP is closest to the stage", "Row A is quietest", or anything similar - the tool does not return view quality or stage proximity, so you must not imply it does. If the user asks a view/quality question advise_seats can't answer (e.g. "which row has the best view"), say you don't have that information rather than guessing.
+
+ORDINAL EVENT REFERENCES:
+When the user refers to an event by position ("the first one", "the second movie", "the third event"), that position refers to the numbering in the MOST RECENT numbered list of search results you presented for the topic currently under discussion - never an older or unrelated search from earlier in the conversation. To resolve the actual event_id (and event_time, if the title has multiple showtimes) behind that position:
+1. Identify which of your own previous numbered replies is the most recent one relevant to what the user is now asking about.
+2. Re-call search_events using the exact same filters you used to produce that numbered list, so you get fresh, correct event_id values - never reuse an event_id from memory without re-fetching it this way.
+3. Match the ordinal word to the corresponding position in that fresh result list, then proceed (get_ticket_categories / get_available_seats / advise_seats / book_ticket_transaction) using that event_id.
+If more than one showtime exists for the item at that position, ask which showtime before proceeding, per the multiple-showtimes rule above.
+
+If the user explicitly corrects what an ordinal refers to (for example, "the third movie is Pushpa 2" after you listed something else in that position), treat that correction as authoritative and final for the rest of the conversation: call search_events for the corrected title/event to get its real event_id, and use that corrected event for every later reference to "the third movie" (or whatever ordinal they corrected) - do not fall back to the original, incorrect item at that position again, even though the original numbered list still shows something else there.
 
 2. Artist biography / venue details / policies
 You do NOT currently have a tool for artist background, genre, popular songs, venue facilities/capacity, or general refund/booking policy questions. If asked about these, say honestly that you don't have that information right now and offer to help with event listings, prices, or bookings instead. Never invent artist biography, venue details, or policy details.
@@ -212,6 +251,7 @@ def _build_bound_handlers(user_id: str, chat_id: str | None) -> dict:
         "get_user_hosted_shows": lambda: _BASE_HANDLERS["get_user_hosted_shows"](user_id),
         "cancel_booking": lambda booking_id: _BASE_HANDLERS["cancel_booking"](user_id, booking_id),
         "link_telegram_account": lambda email: _BASE_HANDLERS["link_telegram_account"](chat_id, email),
+        "advise_seats": _BASE_HANDLERS["advise_seats"],
         "get_buy_advice": _BASE_HANDLERS["get_buy_advice"],
     }
 
@@ -230,6 +270,7 @@ def classify_intent(message: str, history: list[types.Content]) -> IntentClassif
 - EVENT_SEARCH: Searching for concerts, events, availability, tickets, prices.
 - USER_DATA: Asking about their own bookings, wishlist, or hosted/submitted shows.
 - FOLLOW_UP: A query that clearly references a previous result ("which one", "the cheapest of those").
+- SEAT_ADVICE: User asks for seat or ticket‑category recommendations (e.g., "best seats", "cheap seats under 2000", "premium seats").
 - GENERAL_LIVEWIRE: General questions about the platform capabilities.
 
 Set context_needed to true ONLY if the user's query relies on previous conversation (e.g. "Which one is cheaper?", "book the second one").
@@ -286,13 +327,25 @@ async def _run(effective_user_id: str, session_id: str, name: str, is_admin: boo
         logger.info("Demand query detected – forcing FOLLOW_UP with context_needed=True")
         classification = IntentClassification(intent="FOLLOW_UP", context_needed=True)
 
-    # Ordinal reference handling – keep only the most recent search result for accurate event resolution
+    # Seat/ticket recommendation query detection – treat as FOLLOW_UP with
+    # context_needed=True so the full history (including the numbered
+    # search results the event_id must be resolved from) stays available.
+    if _is_seat_advice_query(message):
+        logger.info("Seat advice query detected – forcing FOLLOW_UP with context_needed=True")
+        classification = IntentClassification(intent="SEAT_ADVICE", context_needed=True)
+
+    # Ordinal reference handling ("the first/second/third event", or an
+    # explicit correction like "the third movie is Pushpa 2"). We
+    # deliberately do NOT truncate history here: the numbered search
+    # results (and any later correction of what an ordinal refers to) an
+    # ordinal reference needs to resolve against can be further back than
+    # the last few turns, and trimming risks cutting off the very listing
+    # the model needs to re-search from. The full history plus the
+    # ORDINAL EVENT REFERENCES rules in SYSTEM_PROMPT (re-run search_events
+    # with the original filters, honor explicit corrections) are
+    # responsible for correct resolution instead.
     if re.search(r"\b(first|second|third|fourth|fifth)\b", message, re.IGNORECASE):
-        if len(history) >= 2:
-            history = history[-2:]
-            logger.info("Ordinal reference detected – trimmed history to recent turns for event resolution")
-        else:
-            logger.info("Ordinal reference detected – insufficient history to trim.")
+        logger.info("Ordinal reference detected – keeping full history so the correct numbered search result can be re-resolved")
 
     if not classification.context_needed:
         if history:
