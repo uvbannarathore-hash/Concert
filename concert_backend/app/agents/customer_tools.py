@@ -215,6 +215,10 @@ def get_user_hosted_shows(user_id: str) -> dict:
 def cancel_booking(user_id: str, booking_id: str) -> dict:
     return voice_db.cancel_booking_for_user(user_id, booking_id)
 
+def check_cancellation_eligibility(user_id: str, booking_id: str) -> dict:
+    from app.services.cancellation_service import get_cancellation_eligibility as service_check
+    return service_check(booking_id, user_id)
+
 
 def link_telegram_account(chat_id: str, email: str) -> dict:
     """Links a Telegram chat to an existing website account by email, via
@@ -343,8 +347,19 @@ FUNCTION_DECLARATIONS = [
         "parameters": {"type": "object", "properties": {}}
     },
     {
+        "name": "check_cancellation_eligibility",
+        "description": "Use this to check if a specific booking can be cancelled, and to find out the exact refund amount and cancellation fee percentage. You must ALWAYS use this tool before cancelling a booking to read the refund amount to the user. Do not invent cancellation policies or refund amounts.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "booking_id": {"type": "string", "description": "The booking ID to check for cancellation eligibility."}
+            },
+            "required": ["booking_id"]
+        }
+    },
+    {
         "name": "cancel_booking",
-        "description": "Use this ONLY when the user explicitly wants to cancel an existing booking. If the booking_id is not known, first call get_user_booking_history to find it, then confirm with the user which booking to cancel. Always get explicit confirmation before finalizing the cancellation.",
+        "description": "Use this ONLY when the user explicitly wants to cancel an existing booking AND has already confirmed they want to proceed after hearing the refund amount. If the booking_id is not known, first call get_user_booking_history to find it. Then call check_cancellation_eligibility to tell the user the refund amount and ask for confirmation. Once they confirm, use this tool to actually cancel the booking. This tool cancels the booking, restores the seats, and automatically initiates the Razorpay refund. Never claim a refund succeeded without checking the tool response.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -390,6 +405,7 @@ TOOL_HANDLERS = {
     "get_user_booking_history": get_user_booking_history,
     "get_user_hosted_shows": get_user_hosted_shows,
     "cancel_booking": cancel_booking,
+    "check_cancellation_eligibility": check_cancellation_eligibility,
     "link_telegram_account": link_telegram_account,
     "get_buy_advice": get_buy_advice,
     "advise_seats": advise_seats,

@@ -93,8 +93,32 @@ serve(async (req) => {
         <p>See you at the show!</p>
       `;
     } else if (justCancelled) {
+      const details = record.refund_details || {};
+      const eligibleAmount = details.eligible_amount || 0;
+      const cancellationFee = details.cancellation_fee_percentage || 0;
+      const refundPercentage = details.refund_percentage || 0;
+      const refundAmount = details.refund_amount || 0;
+      const refundStatus = record.payment_status;
+
       subject = "Your booking has been cancelled";
-      telegramMessage = `Your booking has been cancelled.\n\n${eventLine}Booking ID: ${record.booking_id}\n\nIf you have already paid, your refund is being processed and will reflect in your account soon.`;
+      telegramMessage = `Your booking has been cancelled.\n\n${eventLine}Booking ID: ${record.booking_id}\n\nRefund Status: ${refundStatus}\nRefund Amount: ₹${refundAmount}`;
+      // Build a status‑specific message for the email
+      let refundMessage = "";
+      switch (refundStatus) {
+        case "Refunded":
+        case "Refund Completed":
+          refundMessage = `Your refund of ₹${refundAmount} has been processed successfully.`;
+          break;
+        case "Refund Pending":
+        case "Refund Initiated":
+          refundMessage = `Your refund of ₹${refundAmount} is being processed and will reflect in your account soon.`;
+          break;
+        case "Refund Failed":
+          refundMessage = `We attempted to process a refund of ₹${refundAmount}, but it failed. Our support team will contact you shortly.`;
+          break;
+        default:
+          refundMessage = `Refund status: ${refundStatus}.`;
+      }
       emailHtml = `
         <h2>Booking Cancelled</h2>
         <p>Hi ${user?.name || "there"},</p>
@@ -102,8 +126,13 @@ serve(async (req) => {
         <ul>
           ${event ? `<li><strong>Event:</strong> ${event.artist_name}${event.venue_name ? ` @ ${event.venue_name}` : ""}</li>` : ""}
           <li><strong>Booking ID:</strong> ${record.booking_id}</li>
+          <li><strong>Eligible Amount:</strong> ₹${eligibleAmount}</li>
+          <li><strong>Cancellation Fee:</strong> ${cancellationFee}%</li>
+          <li><strong>Refund Percentage:</strong> ${refundPercentage}%</li>
+          <li><strong>Refund Amount:</strong> ₹${refundAmount}</li>
+          <li><strong>Refund Status:</strong> ${refundStatus}</li>
         </ul>
-        <p>If you have already paid, your refund is being processed and will reflect in your account soon.</p>
+        <p>${refundMessage}</p>
       `;
     } else if (justReminded) {
       subject = "Reminder: Your upcoming event is tomorrow!";

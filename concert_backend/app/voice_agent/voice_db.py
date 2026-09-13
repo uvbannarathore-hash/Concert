@@ -17,6 +17,7 @@ from calendar import monthrange
 from zoneinfo import ZoneInfo
 from app.supabase_client import supabase_admin
 from app.config import RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET
+from app.services.cancellation_service import get_cancellation_eligibility
 
 logger = logging.getLogger("voice_db")
 
@@ -656,6 +657,19 @@ def cancel_booking(caller_phone: str, booking_id: str) -> dict:
 def cancel_booking_for_user(user_id: str, booking_id: str) -> dict:
     """Website STS flow: cancels a booking, filtered by booking_id AND the authenticated
     user_id, same rule enforced in booking_routes.cancel_booking."""
+    
+    booking_check = supabase_admin.table("bookings").select("status, payment_status, razorpay_payment_id").eq("booking_id", booking_id).eq("user_id", user_id).execute()
+    if not booking_check.data:
+        return {"success": False, "message": "Booking not found, or it doesn't belong to this account."}
+        
+    booking = booking_check.data[0]
+    if booking["status"] == "Cancelled":
+        return {"success": True, "message": f"Booking {booking_id} is already cancelled."}
+        
+    eligibility = get_cancellation_eligibility(booking_id, user_id)
+    if not eligibility["eligible"]:
+        return {"success": False, "message": f"Cannot cancel booking: {eligibility['reason']}"}
+
     result = (
         supabase_admin.table("bookings")
         .update({"status": "Cancelled", "payment_status": "Cancelled"})
@@ -666,7 +680,49 @@ def cancel_booking_for_user(user_id: str, booking_id: str) -> dict:
     if not result.data:
         return {"success": False, "message": "Booking not found, or it doesn't belong to this account."}
 
-    return {"success": True, "message": f"Booking {booking_id} has been cancelled."}
+    refund_status = "Not Applicable"
+    if booking.get("razorpay_payment_id") and eligibility["refund_amount_paise"] > 0:
+        try:
+            refund = razorpay_client.payment.refund(booking["razorpay_payment_id"], {
+                "amount": eligibility["refund_amount_paise"],
+                "notes": {"booking_id": booking_id, "reason": "voice_user_cancelled"}
+            })
+            rzp_status = refund.get("status")
+            if rzp_status == "processed":
+                db_payment_status = "Refunded"
+                refund_status = "Refund Completed"
+            elif rzp_status == "pending":
+                db_payment_status = "Refund Pending"
+                refund_status = "Refund Pending"
+            else:
+                db_payment_status = "Refund Initiated"
+                refund_status = "Refund Initiated"
+        except Exception as e:
+            db_payment_status = "Refund Failed"
+            refund_status = f"Refund Failed: {str(e)}"
+            
+        supabase_admin.table("bookings").update({"payment_status": db_payment_status}).eq("booking_id", booking_id).execute()
+
+    try:
+        supabase_admin.functions().invoke(
+            "send-booking-notifications",
+            invoke_options={
+                "body": {
+                    "action": "cancellation",
+                    "booking_id": booking_id,
+                    "user_id": user_id,
+                    "refund_status": refund_status,
+                    "refund_amount": eligibility["refund_amount"],
+                    "cancellation_fee": eligibility["cancellation_fee_percentage"],
+                    "refund_percentage": eligibility["refund_percentage"],
+                    "eligible_amount": eligibility["eligible_amount"]
+                }
+            }
+        )
+    except Exception:
+        pass
+
+    return {"success": True, "message": f"Booking {booking_id} has been cancelled. Expected refund: INR {eligibility['refund_amount']}"}
 
 def get_user_hosted_shows(user_id: str) -> dict:
     """Website/Telegram STS flow: looks up the user's submitted/hosted shows from show_submissions."""

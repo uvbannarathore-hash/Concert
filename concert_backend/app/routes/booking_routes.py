@@ -8,6 +8,7 @@ from app.auth import get_current_user
 from app.limiter import limiter
 from app.supabase_client import supabase_admin
 from app.config import RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, RAZORPAY_WEBHOOK_SECRET
+from app.services.cancellation_service import get_cancellation_eligibility
 
 router = APIRouter(prefix="/bookings", tags=["bookings"])
 
@@ -478,27 +479,40 @@ async def razorpay_webhook(request: Request):
         if booking.data:
             booking_row = booking.data[0]
 
+            # Calculate amount (price * seats) – used for both payments and bookings total_amount
+            ticket_row = _get_ticket_or_404(booking_row["event_id"], booking_row["category"])
+            amount = float(ticket_row["price_inr"]) * booking_row["seats_booked"]
+
+            # Update booking with payment details and persist total_amount. Use the same amount value as the
+            # payments record so the two stay consistent. If total_amount is already set (e.g., duplicate webhook),
+            # the same value will be written again – this is safe and idempotent.
             supabase_admin.table("bookings").update(
                 {
                     "status": "Confirmed",
                     "payment_status": "Paid",
                     "razorpay_payment_id": razorpay_payment_id,
+                    "total_amount": amount,
                 }
             ).eq("booking_id", booking_row["booking_id"]).execute()
 
-            ticket_row = _get_ticket_or_404(booking_row["event_id"], booking_row["category"])
-            amount = float(ticket_row["price_inr"]) * booking_row["seats_booked"]
-
-            supabase_admin.table("payments").insert(
-                {
-                    "payment_id": razorpay_payment_id,
-                    "booking_id": booking_row["booking_id"],
-                    "user_id": booking_row["user_id"],
-                    "amount": amount,
-                    "method": "Razorpay",
-                    "status": "Success",
-                }
-            ).execute()
+            # Idempotent insert into payments: only create a new row if this razorpay_payment_id hasn't been recorded yet.
+            existing_payment = (
+                supabase_admin.table("payments")
+                .select("payment_id")
+                .eq("payment_id", razorpay_payment_id)
+                .execute()
+            )
+            if not existing_payment.data:
+                supabase_admin.table("payments").insert(
+                    {
+                        "payment_id": razorpay_payment_id,
+                        "booking_id": booking_row["booking_id"],
+                        "user_id": booking_row["user_id"],
+                        "amount": amount,
+                        "method": "Razorpay",
+                        "status": "Success",
+                    }
+                ).execute()
 
     # Always 200 on recognized calls so Razorpay doesn't keep retrying
     return {"status": "ok"}
@@ -555,34 +569,174 @@ def my_bookings(current_user: dict = Depends(get_current_user)):
     return {"bookings": result.data, "razorpay_key_id": RAZORPAY_KEY_ID}
 
 
+@router.get("/{booking_id}/cancellation-eligibility")
+def check_cancellation_eligibility(booking_id: str, current_user: dict = Depends(get_current_user)):
+    """
+    Checks if a booking can be cancelled and calculates the expected refund.
+    """
+    eligibility = get_cancellation_eligibility(booking_id, current_user["user_id"])
+    return eligibility
+
+
 @router.post("/{booking_id}/cancel")
 def cancel_booking(booking_id: str, current_user: dict = Depends(get_current_user)):
     """
     Cancels a booking. Filtered by BOTH booking_id and user_id so a
-    user can only cancel their own booking - same security rule we
-    applied inside the n8n cancel_booking tool.
-
-    Seat restoration is handled automatically by the Postgres trigger
-    (trg_restore_seats) - no extra logic needed here. This also doubles
-    as the "release seats" path for abandoned/failed Razorpay payments
-    on Pending bookings.
+    user can only cancel their own booking.
+    Automatically initiates a Razorpay refund if eligible.
     """
+    # Check if already cancelled
+    booking_check = supabase_admin.table("bookings").select("status, payment_status, razorpay_payment_id").eq("booking_id", booking_id).eq("user_id", current_user["user_id"]).execute()
+    if not booking_check.data:
+        raise HTTPException(status_code=404, detail="Booking not found or it does not belong to this user.")
+        
+    booking = booking_check.data[0]
+    if booking["status"] == "Cancelled":
+        # Idempotency: return existing state
+        return {
+            "message": "Booking is already cancelled",
+            "booking_id": booking_id,
+            "payment_status": booking.get("payment_status")
+        }
+    if booking.get("payment_status") == "Cancellation Processing":
+        return {
+            "message": "Cancellation is currently processing",
+            "booking_id": booking_id,
+            "payment_status": "Cancellation Processing"
+        }
+        
+    # Re-evaluate eligibility server-side
+    eligibility = get_cancellation_eligibility(booking_id, current_user["user_id"])
+    if not eligibility["eligible"]:
+        raise HTTPException(status_code=400, detail=f"Cannot cancel booking: {eligibility['reason']}")
+        
+    # Proceed with cancellation
+    # Seat restoration is handled automatically by the Postgres trigger upon status='Cancelled'
+    # To prevent premature seat restoration and duplicate cancellation emails, we DO NOT 
+    # set status='Cancelled' here. We only lock the row using payment_status.
     result = (
         supabase_admin.table("bookings")
-        .update({"status": "Cancelled", "payment_status": "Cancelled"})
+        .update({"payment_status": "Cancellation Processing"})
         .eq("booking_id", booking_id)
         .eq("user_id", current_user["user_id"])
         .neq("status", "Cancelled")
+        .neq("payment_status", "Cancellation Processing")
         .execute()
     )
 
     if not result.data:
-        raise HTTPException(
-            status_code=404,
-            detail="Booking not found, or it does not belong to this user",
-        )
+        raise HTTPException(status_code=409, detail="Cancellation conflict, please try again.")
 
-    return {"message": "Booking cancelled", "booking_id": booking_id}
+    refund_status = "Not Applicable"
+    # Initiate Razorpay refund
+    if booking.get("razorpay_payment_id") and eligibility["refund_amount_paise"] > 0:
+        try:
+            payment_info = razorpay_client.payment.fetch(booking["razorpay_payment_id"])
+            payment_status = payment_info.get("status")
+            captured_amount = payment_info.get("amount")  # paise
+
+            # Check for existing refunds to avoid duplicate refunds
+            existing_refunds = payment_info.get("refunds", [])
+            if existing_refunds:
+                existing_refund = existing_refunds[0]
+                refund_id = existing_refund.get("id")
+                rzp_status = existing_refund.get("status")
+                if rzp_status == "processed":
+                    refund_status = "Refund Completed"
+                    db_payment_status = "Refunded"
+                elif rzp_status == "pending":
+                    refund_status = "Refund Pending"
+                    db_payment_status = "Refund Pending"
+                else:
+                    refund_status = "Refund Initiated"
+                    db_payment_status = "Refund Initiated"
+            elif payment_status == "captured":
+                # Proceed with refund
+                refund_amount = min(eligibility["refund_amount_paise"], captured_amount)
+                refund = razorpay_client.payment.refund(
+                    booking["razorpay_payment_id"],
+                    {"amount": refund_amount, "notes": {"booking_id": booking_id, "reason": "user_cancelled"}},
+                )
+                refund_id = refund.get("id") if isinstance(refund, dict) else None
+                rzp_status = refund.get("status")
+                if rzp_status == "processed":
+                    refund_status = "Refund Completed"
+                    db_payment_status = "Refunded"
+                elif rzp_status == "pending":
+                    refund_status = "Refund Pending"
+                    db_payment_status = "Refund Pending"
+                else:
+                    refund_status = "Refund Initiated"
+                    db_payment_status = "Refund Initiated"
+            elif payment_status == "authorized":
+                # Attempt capture if authorized
+                try:
+                    razorpay_client.payment.capture(booking["razorpay_payment_id"], captured_amount)
+                except Exception as cap_err:
+                    raise Exception(f"Capture failed: {cap_err}")
+                # Re‑fetch payment to verify capture
+                payment_info = razorpay_client.payment.fetch(booking["razorpay_payment_id"])
+                payment_status = payment_info.get("status")
+                captured_amount = payment_info.get("amount")
+                if payment_status == "captured":
+                    refund_amount = min(eligibility["refund_amount_paise"], captured_amount)
+                    refund = razorpay_client.payment.refund(
+                        booking["razorpay_payment_id"],
+                        {"amount": refund_amount, "notes": {"booking_id": booking_id, "reason": "user_cancelled"}},
+                    )
+                    refund_id = refund.get("id") if isinstance(refund, dict) else None
+                    rzp_status = refund.get("status")
+                    if rzp_status == "processed":
+                        refund_status = "Refund Completed"
+                        db_payment_status = "Refunded"
+                    elif rzp_status == "pending":
+                        refund_status = "Refund Pending"
+                        db_payment_status = "Refund Pending"
+                    else:
+                        refund_status = "Refund Initiated"
+                        db_payment_status = "Refund Initiated"
+                else:
+                    refund_status = f"Refund Failed: Payment not captured after capture attempt (status: {payment_status})"
+                    db_payment_status = "Refund Failed"
+            else:
+                # Payment not in a refundable state
+                refund_status = f"Refund Failed: Payment status {payment_status} not eligible for refund"
+                db_payment_status = "Refund Failed"
+        except Exception as e:
+            refund_status = f"Refund Failed: {str(e)}"
+            db_payment_status = "Refund Failed"
+            print(f"Razorpay refund error for booking {booking_id}: {e}")
+    elif eligibility["refund_amount_paise"] == 0 and booking.get("razorpay_payment_id"):
+        refund_status = "No Refund (100% Fee)"
+        db_payment_status = "No Refund (100% Fee)"
+    else:
+        refund_status = "Not Applicable"
+        db_payment_status = "Cancelled"
+        
+    # Update booking status to Cancelled and save actual Razorpay result with refund breakdown.
+    # This atomic transition (status from Confirmed -> Cancelled) fires the Postgres trigger exactly once,
+    # restoring seats and sending the email notification with the final refund_details.
+    supabase_admin.table("bookings").update({
+        "status": "Cancelled",
+        "payment_status": db_payment_status,
+        "refund_details": {
+            "eligible_amount": eligibility["eligible_amount"],
+            "cancellation_fee_percentage": eligibility["cancellation_fee_percentage"],
+            "refund_percentage": eligibility["refund_percentage"],
+            "refund_amount": eligibility["refund_amount"],
+            "refund_id": refund_id if 'refund_id' in locals() else None
+        }
+    }).eq("booking_id", booking_id).execute()
+    
+    # NOTE: Email notification is now handled by the Postgres UPDATE trigger which invokes the `send-booking-notifications` Edge Function with the appropriate payload (record and old_record). The cancellation flow updates the booking status and payment_status, which triggers the notification automatically. No direct edge function invocation is needed here.
+    print(f"Cancellation for booking {booking_id} completed; DB trigger will handle email notification.")
+
+    return {
+        "message": "Booking cancelled",
+        "booking_id": booking_id,
+        "refund_status": refund_status,
+        "refund_amount": eligibility["refund_amount"]
+    }
 
 @router.get("/{booking_id}/pass")
 def get_booking_pass(booking_id: str):
@@ -612,42 +766,59 @@ def get_booking_pass(booking_id: str):
 @router.post("/{booking_id}/refund")
 def initiate_refund(booking_id: str, current_user: dict = Depends(get_current_user)):
     """
-    Initiates a Razorpay refund for a cancelled booking.
+    Internal/Admin manual refund endpoint. 
+    Not used in the normal user flow since cancellation automatically refunds.
     """
+    admin_check = supabase_admin.table("users").select("is_admin").eq("user_id", current_user["user_id"]).execute()
+    if not admin_check.data or not admin_check.data[0].get("is_admin"):
+        raise HTTPException(status_code=403, detail="Only admins can initiate manual refunds.")
+
     result = (
         supabase_admin.table("bookings")
         .select("*")
         .eq("booking_id", booking_id)
-        .eq("user_id", current_user["user_id"])
         .execute()
     )
     if not result.data:
         raise HTTPException(status_code=404, detail="Booking not found")
 
     booking = result.data[0]
-    if booking["status"] != "Cancelled":
-        raise HTTPException(status_code=400, detail="Only Cancelled bookings can be refunded")
     
-    if booking["payment_status"] == "Refunded":
-        raise HTTPException(status_code=400, detail="Booking is already refunded")
+    if booking["payment_status"] in ["Refunded", "Refund Pending", "Refund Initiated"]:
+        return {"message": f"Refund already processed or pending. Status: {booking['payment_status']}"}
     
     if not booking.get("razorpay_payment_id"):
         raise HTTPException(status_code=400, detail="No successful payment to refund")
 
-    ticket_row = _get_ticket_or_404(booking["event_id"], booking["category"])
-    amount_inr = float(ticket_row["price_inr"]) * booking["seats_booked"]
-    amount_paise = int(round(amount_inr * 100))
+    amount = booking.get("total_amount")
+    if amount is None:
+        # Check payments table for actual successful payment amount
+        payment_check = supabase_admin.table("payments").select("amount").eq("booking_id", booking_id).eq("status", "Success").execute()
+        if payment_check.data and payment_check.data[0].get("amount"):
+            amount = payment_check.data[0]["amount"]
+        else:
+            ticket_row = _get_ticket_or_404(booking["event_id"], booking["category"])
+            amount = float(ticket_row["price_inr"]) * booking["seats_booked"]
+    
+    amount_paise = int(round(float(amount) * 100))
 
     try:
-        razorpay_client.payment.refund(booking["razorpay_payment_id"], {
+        refund = razorpay_client.payment.refund(booking["razorpay_payment_id"], {
             "amount": amount_paise,
-            "notes": {"booking_id": booking_id}
+            "notes": {"booking_id": booking_id, "reason": "admin_manual_refund"}
         })
+        rzp_status = refund.get("status")
+        if rzp_status == "processed":
+            db_payment_status = "Refunded"
+        elif rzp_status == "pending":
+            db_payment_status = "Refund Pending"
+        else:
+            db_payment_status = "Refund Initiated"
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Refund failed: {str(e)}")
 
     supabase_admin.table("bookings").update(
-        {"payment_status": "Refunded"}
+        {"payment_status": db_payment_status}
     ).eq("booking_id", booking_id).execute()
 
-    return {"message": "Refund initiated successfully"}
+    return {"message": "Refund initiated successfully", "status": db_payment_status}

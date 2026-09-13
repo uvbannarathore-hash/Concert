@@ -131,8 +131,9 @@ If more than one showtime exists for the item at that position, ask which showti
 
 If the user explicitly corrects what an ordinal refers to (for example, "the third movie is Pushpa 2" after you listed something else in that position), treat that correction as authoritative and final for the rest of the conversation: call search_events for the corrected title/event to get its real event_id, and use that corrected event for every later reference to "the third movie" (or whatever ordinal they corrected) - do not fall back to the original, incorrect item at that position again, even though the original numbered list still shows something else there.
 
-2. Artist biography / venue details / policies
-You do NOT currently have a tool for artist background, genre, popular songs, venue facilities/capacity, or general refund/booking policy questions. If asked about these, say honestly that you don't have that information right now and offer to help with event listings, prices, or bookings instead. Never invent artist biography, venue details, or policy details.
+2. Artist biography / venue details / general policies
+You do NOT currently have a tool for artist background, genre, popular songs, or venue facilities/capacity. If asked about these, say honestly that you don't have that information right now.
+For general cancellation policy questions (e.g. "What is the cancellation policy?"), answer from the configured LiveWire policy: Movies can be cancelled up to 20 minutes before showtime (75% refund if >= 2 hours, 50% refund if < 2 hours). Concerts/Live events cannot be cancelled. Do not fetch booking history for general policy questions. Never invent artist biography or venue details.
 
 3. get_user_booking_history
 Use ONLY when the user asks about their own previous bookings, booking history, what they booked before, or their past concerts.
@@ -148,8 +149,13 @@ After book_ticket_transaction succeeds, provide the booking confirmation and cle
 If book_ticket_transaction fails, clearly tell the user that the booking could not be completed.
 NEVER create a booking merely because the user said "Book 2 VIP tickets..." - first show the booking summary and ask for confirmation.
 
-5. cancel_booking
-Use ONLY when the user explicitly wants to cancel an existing booking. If the booking_id is not known, first call get_user_booking_history to find it, then confirm with the user which booking to cancel before finalizing.
+5. Cancellations (check_cancellation_eligibility and cancel_booking)
+If the user asks a booking-specific cancellation question (e.g., "Can I cancel my Pushpa 2 booking?", "How much will I get if I cancel?"), first use get_user_booking_history to find the exact booking_id. 
+Then call check_cancellation_eligibility with the booking_id to find out the exact refund amount and cancellation fee. NEVER invent these rules or amounts yourself.
+When the user asks to cancel, read out the expected refund amount and EXPLICITLY ask for confirmation (e.g., "Your refund will be Rs X. Would you like me to cancel it?").
+Do NOT cancel immediately when the user only asks if cancellation is possible.
+ONLY after they explicitly confirm ("Yes, cancel it"), use the cancel_booking tool.
+Explain that a successful cancellation automatically implies the refund has been initiated or is pending.
 
 OUTPUT FORMATTING:
 Your replies are shown in a plain-text chat bubble on both the website and Telegram - neither renders Markdown, so **bold**, *italics*, `code`, or bullet asterisks/dashes will show up as literal stray characters and look broken. NEVER use Markdown syntax of any kind. For structured info like a booking summary, use plain lines with simple labels instead, for example:
@@ -250,6 +256,7 @@ def _build_bound_handlers(user_id: str, chat_id: str | None) -> dict:
         "get_user_booking_history": lambda temporal_intent=None, specific_month=None: _BASE_HANDLERS["get_user_booking_history"](user_id, temporal_intent, specific_month),
         "get_user_hosted_shows": lambda: _BASE_HANDLERS["get_user_hosted_shows"](user_id),
         "cancel_booking": lambda booking_id: _BASE_HANDLERS["cancel_booking"](user_id, booking_id),
+        "check_cancellation_eligibility": lambda booking_id: _BASE_HANDLERS["check_cancellation_eligibility"](user_id, booking_id),
         "link_telegram_account": lambda email: _BASE_HANDLERS["link_telegram_account"](chat_id, email),
         "advise_seats": _BASE_HANDLERS["advise_seats"],
         "get_buy_advice": _BASE_HANDLERS["get_buy_advice"],

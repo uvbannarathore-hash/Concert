@@ -29,6 +29,22 @@ from app.config import GEMINI_API_KEY
 
 logger = logging.getLogger("gemini_loop")
 
+# ---------------------------------------------------------------------------
+# Helper to convert arbitrary argument structures into an immutable, hashable
+# representation. Lists/tuples become tuples, dicts become frozensets of
+# (key, value) pairs (sorted for deterministic order), and primitive types are
+# returned unchanged. This ensures that the duplicate‑call tracker can safely
+# store any combination of arguments, including nested lists/dicts.
+# ---------------------------------------------------------------------------
+from typing import Any
+
+def _make_hashable(value: Any) -> Any:
+    if isinstance(value, dict):
+        return frozenset((k, _make_hashable(v)) for k, v in sorted(value.items()))
+    if isinstance(value, (list, tuple, set)):
+        return tuple(_make_hashable(v) for v in value)
+    return value
+
 MODEL_NAME = "gemini-3.1-flash-lite"
 MAX_TOOL_ITERATIONS = 8  # safety valve against infinite tool-call loops
 
@@ -100,7 +116,9 @@ async def run_agent(
             handler = tool_handlers.get(fc.name)
             args = dict(fc.args) if fc.args else {}
 
-            call_signature = (fc.name, frozenset(args.items()))
+            # Normalise args into an immutable, hashable representation
+            hashable_args = _make_hashable(args)
+            call_signature = (fc.name, hashable_args)
             if call_signature in executed_calls:
                 logger.warning(f"Model requested duplicate tool in same loop: {fc.name} args={args}")
                 result = {"error": "You already called this tool with these exact arguments in this turn. Use the data from the previous response."}
@@ -117,6 +135,8 @@ async def run_agent(
                 except Exception as e:
                     logger.exception(f"Tool {fc.name} raised an error")
                     result = {"error": str(e)}
+                # Record the successful (or attempted) call to prevent duplicates
+                executed_calls.add(call_signature)
 
             response_parts.append(
                 types.Part.from_function_response(name=fc.name, response={"result": result})

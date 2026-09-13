@@ -171,6 +171,9 @@ export const api = {
       body: { booking_id, razorpay_order_id, razorpay_payment_id, razorpay_signature },
     }),
 
+  checkCancellationEligibility: (bookingId) =>
+    request(`/bookings/${bookingId}/cancellation-eligibility`, { auth: true }),
+
   cancelBooking: (bookingId) =>
     request(`/bookings/${bookingId}/cancel`, { method: 'POST', auth: true }),
 

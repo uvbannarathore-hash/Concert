@@ -16,7 +16,7 @@ export default function BookingsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [cancellingId, setCancellingId] = useState('')
-  const [refundingId, setRefundingId] = useState('')
+  const [cancellationEligibility, setCancellationEligibility] = useState(null)
   const [selectedPass, setSelectedPass] = useState(null)
   const [reviewingEvent, setReviewingEvent] = useState(null)
   const [razorpayKeyId, setRazorpayKeyId] = useState('')
@@ -49,30 +49,31 @@ export default function BookingsPage() {
 
   useEffect(load, [])
 
-  async function handleCancel(bookingId) {
-    if (!window.confirm("Are you sure you want to cancel this booking? This action is irreversible.")) return
-    setCancellingId(bookingId)
+  async function handleCancelInitiate(bookingId) {
     try {
-      await api.cancelBooking(bookingId)
-      load()
+      const eligibility = await api.checkCancellationEligibility(bookingId)
+      if (!eligibility.eligible) {
+        alert("Cannot cancel this booking: " + eligibility.reason)
+        return
+      }
+      setCancellationEligibility({ bookingId, ...eligibility })
     } catch (err) {
-      setError(err.message)
-    } finally {
-      setCancellingId('')
+      alert("Failed to check cancellation eligibility: " + err.message)
     }
   }
 
-  async function handleRefund(bookingId) {
-    if (!window.confirm("Are you sure you want to refund this booking?")) return
-    setRefundingId(bookingId)
+  async function handleCancelConfirm() {
+    if (!cancellationEligibility) return
+    setCancellingId(cancellationEligibility.bookingId)
     try {
-      await api.initiateRefund(bookingId)
-      alert("Refund initiated successfully")
+      await api.cancelBooking(cancellationEligibility.bookingId)
+      alert("Booking cancelled successfully.")
       load()
     } catch (err) {
-      alert("Refund failed: " + err.message)
+      alert("Failed to cancel booking: " + err.message)
     } finally {
-      setRefundingId('')
+      setCancellingId('')
+      setCancellationEligibility(null)
     }
   }
 
@@ -201,7 +202,8 @@ export default function BookingsPage() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto px-6 py-12 animate-fade-in-up">
+    <>
+      <div className="max-w-6xl mx-auto px-6 py-12 animate-fade-in-up">
       
       {/* Header section */}
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8 border-b border-white/[0.04] pb-6">
@@ -321,7 +323,7 @@ export default function BookingsPage() {
                   </button>
                   {isConfirmed && (
                     <button
-                      onClick={() => handleCancel(b.booking_id)}
+                      onClick={() => handleCancelInitiate(b.booking_id)}
                       disabled={cancellingId === b.booking_id}
                       className="text-xs text-haze hover:text-spot underline disabled:opacity-40"
                     >
@@ -377,7 +379,7 @@ export default function BookingsPage() {
                         Download Receipt
                       </button>
                       <button
-                        onClick={() => handleCancel(b.booking_id)}
+                        onClick={() => handleCancelInitiate(b.booking_id)}
                         disabled={cancellingId === b.booking_id}
                         className="text-[11px] text-haze/60 hover:text-spot underline underline-offset-4 disabled:opacity-40 font-mono transition mt-1"
                       >
@@ -386,15 +388,6 @@ export default function BookingsPage() {
                     </div>
                   )}
 
-                  {b.status === 'Cancelled' && !!b.razorpay_payment_id && b.payment_status !== 'Refunded' && (
-                    <button
-                      onClick={() => handleRefund(b.booking_id)}
-                      disabled={refundingId === b.booking_id}
-                      className="text-[11px] text-spot hover:text-white bg-spot/20 hover:bg-spot/40 rounded px-2 py-1 font-mono transition w-full mt-2"
-                    >
-                      {refundingId === b.booking_id ? 'Refunding…' : 'Initiate Refund'}
-                    </button>
-                  )}
 
                   {b.status === 'Pending' && (
                     <button
@@ -437,6 +430,54 @@ export default function BookingsPage() {
           load()
         }}
       />
-    </div>
+      </div>
+
+      {/* Custom Cancellation Modal */}
+      {cancellationEligibility && (
+        <div className="fixed inset-0 bg-void/90 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-stage border border-white/[0.08] rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
+            <h3 className="font-display text-2xl uppercase text-paper mb-4">Cancel Booking</h3>
+            <p className="text-sm text-haze/80 mb-6">
+              Are you sure you want to cancel this booking?
+            </p>
+            
+            <div className="bg-void/50 rounded-lg p-4 mb-6 font-mono text-[11px] space-y-3">
+              <div className="flex justify-between text-haze">
+                <span>Eligible Amount</span>
+                <span>₹{cancellationEligibility.eligible_amount}</span>
+              </div>
+              <div className="flex justify-between text-haze">
+                <span>Cancellation Fee ({cancellationEligibility.cancellation_fee_percentage}%)</span>
+                <span className="text-spot">- ₹{(cancellationEligibility.eligible_amount * cancellationEligibility.cancellation_fee_percentage / 100).toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between text-paper pt-3 border-t border-white/[0.06] font-bold text-xs">
+                <span>Total Refund ({cancellationEligibility.refund_percentage}%)</span>
+                <span className="text-go">₹{cancellationEligibility.refund_amount}</span>
+              </div>
+            </div>
+            
+            <p className="text-xs text-haze/60 mb-6 italic">
+              The refund will be initiated automatically to your original payment method.
+            </p>
+            
+            <div className="flex gap-3 justify-end">
+              <button 
+                onClick={() => setCancellationEligibility(null)}
+                className="btn-ghost text-xs uppercase px-4 py-2"
+              >
+                Keep Booking
+              </button>
+              <button 
+                onClick={handleCancelConfirm}
+                disabled={cancellingId === cancellationEligibility.bookingId}
+                className="btn-spot text-xs uppercase px-4 py-2 font-bold"
+              >
+                {cancellingId === cancellationEligibility.bookingId ? 'Cancelling...' : 'Confirm Cancel'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   )
 }
