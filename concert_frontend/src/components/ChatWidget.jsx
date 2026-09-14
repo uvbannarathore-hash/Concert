@@ -252,7 +252,7 @@ export default function ChatWidget() {
                     <Sparkles className="w-3.5 h-3.5 text-spot2" />
                   </span>
                   <div className="bg-stage2 border border-white/[0.04] rounded-xl rounded-bl-sm px-3 py-2 text-xs text-haze">
-                    Typing…
+                    Thinking…
                   </div>
                 </div>
               )}

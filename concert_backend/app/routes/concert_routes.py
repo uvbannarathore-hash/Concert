@@ -1,7 +1,10 @@
 import json
+import logging
 from fastapi import APIRouter, HTTPException, Depends
 from app.supabase_client import supabase_admin
 from app.auth import get_current_user
+
+logger = logging.getLogger("concert_routes")
 
 router = APIRouter(prefix="/concerts", tags=["concerts"])
 
@@ -110,8 +113,8 @@ def get_recommendations(user: dict = Depends(get_current_user)):
                     for i in range(768):
                         vector_sum[i] += emb_list[i] * weight
                     total_weight += weight
-            except Exception:
-                pass
+            except Exception as embed_err:
+                logger.warning(f"Skipping malformed embedding for event {e.get('event_id')}: {embed_err}")
                 
         if total_weight > 0:
             centroid = [v / total_weight for v in vector_sum]

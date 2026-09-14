@@ -2,10 +2,11 @@
 # app/voice_agent/agent.py (website STS, LiveKit Cloud) and
 # app/voice_agent/tata_voice_server.py (phone calls, Tata Smartflo).
 #
-# This is a DIFFERENT Render service from the main FastAPI backend
-# (concert_backend/requirements.txt) - deploy it as a Background Worker
-# (agent.py needs no public port) or a Web Service (tata_voice_server.py
-# needs a public wss:// endpoint for Tata Smartflo to connect to).
+# This is a SEPARATE service/process from the main FastAPI backend
+# (concert_backend/requirements.txt) - run it as its own background worker
+# process (agent.py needs no public port) or as a service with a public
+# wss:// endpoint (tata_voice_server.py needs one for Tata Smartflo to
+# connect to).
 #
 # Versions below are copied from Yuvraj's local environment, where this
 # exact combination is already verified working against livekit-agents 1.7.
@@ -123,9 +124,10 @@ websockets==15.0.1
 yarl==1.24.5
 
 # NOTE: PyAudio and sounddevice were removed from this list - they need
-# PortAudio's system library (libportaudio2), which Render's default Python
-# environment does NOT have preinstalled, so leaving them in would fail the
-# build. Both were local-mic-testing leftovers anyway - tata_voice_server.py
+# PortAudio's system library (libportaudio2), which a minimal Python
+# environment does NOT have preinstalled by default, so leaving them in
+# risks failing the build unless that system package is installed first.
+# Both were local-mic-testing leftovers anyway - tata_voice_server.py
 # talks over Tata's WebSocket, not a local audio device, so nothing in the
 # deployed worker actually needs them. If you ever DO need a local audio
 # device on the worker (unlikely), add an apt step (`apt-get install -y

@@ -364,4 +364,4 @@ export function getPublicPassUrl(bookingId) {
     return `http://${localIp}:${port}/ticket/${bookingId}`
   }
   return `${origin}/ticket/${bookingId}`
-}
+}

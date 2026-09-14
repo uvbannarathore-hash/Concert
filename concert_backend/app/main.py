@@ -7,6 +7,7 @@ from slowapi.errors import RateLimitExceeded
 from app.routes import artist_routes
 from app.limiter import limiter
 from app.routes import auth_routes, chat_routes, concert_routes, booking_routes, admin_routes, wishlist_routes, voice_routes, telegram_routes, show_routes, coupon_routes, venue_routes, review_routes, analytics_routes, waitlist_routes, ai_routes
+from app.config import EXTRA_CORS_ORIGINS
 app = FastAPI(title="Concert Booking Assistant API")
 
 app.state.limiter = limiter
@@ -44,7 +45,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(status_code=422, content={"detail": detail})
 
 # Allow the frontend (running on a different port/domain) to call this API.
-# Tighten allow_origins to your actual frontend URL before going live.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -53,7 +53,7 @@ app.add_middleware(
         "http://127.0.0.1:5173",
         "https://events-o0v9jffi9-yuvraj-e83c.vercel.app",
         "https://concert-new-one.vercel.app",
-    ],
+    ] + EXTRA_CORS_ORIGINS,
     allow_origin_regex=r"https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+|.*\.loca\.lt|.*\.trycloudflare\.com)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],

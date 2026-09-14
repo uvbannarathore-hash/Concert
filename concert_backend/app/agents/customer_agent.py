@@ -73,6 +73,10 @@ _client = genai.Client(api_key=GEMINI_API_KEY)
 SYSTEM_PROMPT = """You are a friendly and helpful ticket booking assistant, similar to BookMyShow — covering concerts, movies, comedy shows, music shows, plays, and sports events.
 Your job is to answer user questions using the correct tool. You MUST use a tool whenever the user's question requires information from the database. Do not guess or invent information.
 
+DOMAIN SCOPE (HARD RULE):
+You are NOT a general-purpose knowledge assistant. You only help with LiveWire concerts, movies, comedy shows, music shows, plays, sports events, tickets, seats, pricing, demand/availability, bookings, cancellations/refunds, and the LiveWire platform itself.
+If the user asks something with no connection to that - general trivia/knowledge (e.g. "what is the national bird of India"), coding help, math, weather, jokes, news, or any other unrelated topic - do NOT answer it, even partially or briefly, and do NOT use any tool for it. Politely say that's outside what you can help with here, and redirect them to LiveWire concerts, events, tickets, or bookings. Do this even if you're confident you know the answer. This rule overrides every other instruction below when there's a conflict.
+
 PERSONALIZATION:
 If the user's message contains a segment like "[User name: Ravi Kumar]", you know their first name — address them naturally and warmly by their first name in your reply (e.g. "Hey Ravi, ..."). Do this in every reply where the tag is present, but keep it natural and varied, not robotic or repetitive-sounding. Never mention the tag itself. If no such tag is present, do not invent or guess a name.
 
@@ -272,13 +276,17 @@ def classify_intent(message: str, history: list[types.Content]) -> IntentClassif
     Lightweight pre-flight semantic classifier.
     Determines intent and whether previous conversation context is needed.
     """
-    prompt = """Classify the user's message into one of the following intents:
-- OUT_OF_DOMAIN: Unrelated general knowledge, jokes, programming questions, weather, etc. Not related to events or bookings.
+    prompt = """Classify the user's message into exactly one of the following intents:
+- GREETING: The message is ONLY a greeting or opening pleasantry, with no other request in it (e.g. "hi", "hy", "hello", "good morning", "good afternoon", "good evening", "how are you", "nice to meet you"). Natural spelling variations, typos, and other languages/phrasings that express the same thing also count.
+- CLOSING: The message is ONLY a farewell / closing pleasantry, with no other request in it (e.g. "bye", "goodbye", "see you", "see you later", "take care", "thanks", "thank you"). Natural spelling variations and other phrasings that express the same thing also count.
 - EVENT_SEARCH: Searching for concerts, events, availability, tickets, prices.
 - USER_DATA: Asking about their own bookings, wishlist, or hosted/submitted shows.
 - FOLLOW_UP: A query that clearly references a previous result ("which one", "the cheapest of those").
 - SEAT_ADVICE: User asks for seat or ticket‑category recommendations (e.g., "best seats", "cheap seats under 2000", "premium seats").
 - GENERAL_LIVEWIRE: General questions about the platform capabilities.
+- OUT_OF_DOMAIN: Unrelated general knowledge, jokes, programming questions, weather, etc. Not related to events, bookings, or the LiveWire platform.
+
+CRITICAL — mixed messages: A greeting or closing word is very often just a pleasantry attached to a real request in the SAME message (e.g. "good morning, show me concerts in Mumbai", "hi, show me today's events", "hello, can you check my bookings?"). In these cases the message is NOT a GREETING or CLOSING — classify it by the substantive request that follows (EVENT_SEARCH, USER_DATA, etc.). Only classify as GREETING or CLOSING when that pleasantry is the entire content of the message and there is no other question or request riding along with it. A greeting word followed by an unrelated general-knowledge question (e.g. "hi who is the national bird of India?") is OUT_OF_DOMAIN, not GREETING — the domain-scope rule always wins over a pleasantry. A farewell combined with more small talk and nothing else (e.g. "bye, see you later") is still CLOSING.
 
 Set context_needed to true ONLY if the user's query relies on previous conversation (e.g. "Which one is cheaper?", "book the second one").
 If the user's query is a brand new independent search (e.g. "Find Bollywood concerts", "events in Mumbai"), set context_needed to false.
@@ -312,8 +320,16 @@ If there is no recent context provided, context_needed MUST be false.
         return IntentClassification(**data)
     except Exception as e:
         logger.error(f"Intent classification failed: {e}")
-        # Default fallback if classifier fails
-        return IntentClassification(intent="EVENT_SEARCH", context_needed=True)
+        # Fail safe, not fail closed: we deliberately do NOT default to
+        # EVENT_SEARCH here. Mislabeling a classifier failure as a
+        # confident "EVENT_SEARCH" is exactly how an unknown/general
+        # question used to silently sail through as if it had been
+        # correctly classified. "UNKNOWN" is a distinct, non-committal
+        # value: _run() treats it as "let the general agent (and the
+        # DOMAIN SCOPE hard rule in SYSTEM_PROMPT) handle it" rather than
+        # either blocking a possibly-legitimate booking query or quietly
+        # relabeling it as something it was never actually classified as.
+        return IntentClassification(intent="UNKNOWN", context_needed=True)
 
 
 async def _run(effective_user_id: str, session_id: str, name: str, is_admin: bool, message: str, chat_id: str | None) -> str:
@@ -353,6 +369,55 @@ async def _run(effective_user_id: str, session_id: str, name: str, is_admin: boo
     # responsible for correct resolution instead.
     if re.search(r"\b(first|second|third|fourth|fifth)\b", message, re.IGNORECASE):
         logger.info("Ordinal reference detected – keeping full history so the correct numbered search result can be re-resolved")
+
+    # OUT_OF_DOMAIN gate — this is the actual enforcement point. Previously
+    # classify_intent() correctly labeled unrelated general-knowledge
+    # questions as OUT_OF_DOMAIN, but nothing ever read classification.intent
+    # to act on it (it was only used for context_needed and the two regex
+    # overrides above), so every message - regardless of classified intent -
+    # fell through to gemini_loop.run_agent() and got a general-purpose
+    # Gemini answer. This short-circuits before that call, with a static
+    # deterministic reply (no extra Gemini call, ₹0 incremental AI cost).
+    # The demand/seat-advice regex overrides above run first and can
+    # already flip classification away from OUT_OF_DOMAIN for obviously
+    # in-domain phrasing, so this only fires for what the classifier still
+    # considers out-of-domain after those checks.
+    if classification.intent == "OUT_OF_DOMAIN":
+        logger.info("OUT_OF_DOMAIN intent detected – short-circuiting before gemini_loop.run_agent()")
+        greeting = f"Hey {name}, " if name else ""
+        reply = (
+            f"{greeting}that's outside what I can help with here — I'm LiveWire's booking assistant. "
+            "I can help you find concerts, movies, or other events, check ticket prices and availability, "
+            "or manage your bookings. Is there something like that I can help with?"
+        )
+        memory.save_turn("customer", effective_user_id, session_id, message, reply)
+        return reply
+
+    # GREETING / CLOSING — same short-circuit pattern as OUT_OF_DOMAIN above.
+    # The Gemini classifier (not a regex/keyword list) is the sole mechanism
+    # that decides a message is a pure greeting or closing, including
+    # separating them from mixed messages like "good morning, show me
+    # concerts in Mumbai" (which the classifier resolves to EVENT_SEARCH
+    # instead - see the prompt in classify_intent). Once classified, no
+    # further Gemini generation call is needed for these two intents, so we
+    # reply directly and skip gemini_loop.run_agent() entirely.
+    if classification.intent == "GREETING":
+        logger.info("GREETING intent detected – short-circuiting before gemini_loop.run_agent()")
+        who = f" {name}" if name else ""
+        reply = (
+            f"Hey{who}! I'm LiveWire's booking assistant. "
+            "I can help you find concerts, movies, comedy shows, or other events, check ticket prices "
+            "and availability, or manage your bookings. What would you like to do?"
+        )
+        memory.save_turn("customer", effective_user_id, session_id, message, reply)
+        return reply
+
+    if classification.intent == "CLOSING":
+        logger.info("CLOSING intent detected – short-circuiting before gemini_loop.run_agent()")
+        who = f", {name}" if name else ""
+        reply = f"Take care{who}! Come back anytime you want to find or book an event."
+        memory.save_turn("customer", effective_user_id, session_id, message, reply)
+        return reply
 
     if not classification.context_needed:
         if history:

@@ -26,6 +26,11 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "dummy_gemini_key")
 # "Telegram Trigger" + "Send a text message" nodes)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
+# Optional extra allowed CORS origins (comma-separated)
+EXTRA_CORS_ORIGINS = [
+    origin.strip() for origin in os.getenv("EXTRA_CORS_ORIGINS", "").split(",") if origin.strip()
+]
+
 if not SUPABASE_URL or not SUPABASE_ANON_KEY:
     raise RuntimeError(
         "SUPABASE_URL and SUPABASE_ANON_KEY must be set in your .env file"
@@ -37,6 +42,5 @@ for key, val in [
     ("RAZORPAY_WEBHOOK_SECRET", RAZORPAY_WEBHOOK_SECRET),
     ("GEMINI_API_KEY", GEMINI_API_KEY),
 ]:
-    if not val or val.startswith("dummy_"):
+    if not val or (isinstance(val, str) and val.startswith("dummy_")):
         print(f"[Warning] {key} is not configured in .env (using fallback dummy mode)")
-
