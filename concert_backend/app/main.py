@@ -52,8 +52,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://events-two-phi.vercel.app",
-        "https://concert-new-one.vercel.app",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ] + EXTRA_CORS_ORIGINS,

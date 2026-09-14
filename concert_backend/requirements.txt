@@ -54,7 +54,7 @@ tenacity==9.1.4
 # websocket-based Live/streaming API, so the version mismatch never
 # actually matters at runtime.
 #
-# Render Build Command should be:
+# Install command (host-agnostic - run both steps wherever this is deployed):
 #   pip install -r requirements.txt && pip install --no-deps google-genai==1.23.0
 #
 # livekit-api (above) is enough for voice_routes.py's token minting

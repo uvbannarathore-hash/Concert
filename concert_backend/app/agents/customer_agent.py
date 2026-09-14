@@ -276,13 +276,17 @@ def classify_intent(message: str, history: list[types.Content]) -> IntentClassif
     Lightweight pre-flight semantic classifier.
     Determines intent and whether previous conversation context is needed.
     """
-    prompt = """Classify the user's message into one of the following intents:
-- OUT_OF_DOMAIN: Unrelated general knowledge, jokes, programming questions, weather, etc. Not related to events or bookings.
+    prompt = """Classify the user's message into exactly one of the following intents:
+- GREETING: The message is ONLY a greeting or opening pleasantry, with no other request in it (e.g. "hi", "hy", "hello", "good morning", "good afternoon", "good evening", "how are you", "nice to meet you"). Natural spelling variations, typos, and other languages/phrasings that express the same thing also count.
+- CLOSING: The message is ONLY a farewell / closing pleasantry, with no other request in it (e.g. "bye", "goodbye", "see you", "see you later", "take care", "thanks", "thank you"). Natural spelling variations and other phrasings that express the same thing also count.
 - EVENT_SEARCH: Searching for concerts, events, availability, tickets, prices.
 - USER_DATA: Asking about their own bookings, wishlist, or hosted/submitted shows.
 - FOLLOW_UP: A query that clearly references a previous result ("which one", "the cheapest of those").
 - SEAT_ADVICE: User asks for seat or ticket‑category recommendations (e.g., "best seats", "cheap seats under 2000", "premium seats").
 - GENERAL_LIVEWIRE: General questions about the platform capabilities.
+- OUT_OF_DOMAIN: Unrelated general knowledge, jokes, programming questions, weather, etc. Not related to events, bookings, or the LiveWire platform.
+
+CRITICAL — mixed messages: A greeting or closing word is very often just a pleasantry attached to a real request in the SAME message (e.g. "good morning, show me concerts in Mumbai", "hi, show me today's events", "hello, can you check my bookings?"). In these cases the message is NOT a GREETING or CLOSING — classify it by the substantive request that follows (EVENT_SEARCH, USER_DATA, etc.). Only classify as GREETING or CLOSING when that pleasantry is the entire content of the message and there is no other question or request riding along with it. A greeting word followed by an unrelated general-knowledge question (e.g. "hi who is the national bird of India?") is OUT_OF_DOMAIN, not GREETING — the domain-scope rule always wins over a pleasantry. A farewell combined with more small talk and nothing else (e.g. "bye, see you later") is still CLOSING.
 
 Set context_needed to true ONLY if the user's query relies on previous conversation (e.g. "Which one is cheaper?", "book the second one").
 If the user's query is a brand new independent search (e.g. "Find Bollywood concerts", "events in Mumbai"), set context_needed to false.
@@ -386,6 +390,32 @@ async def _run(effective_user_id: str, session_id: str, name: str, is_admin: boo
             "I can help you find concerts, movies, or other events, check ticket prices and availability, "
             "or manage your bookings. Is there something like that I can help with?"
         )
+        memory.save_turn("customer", effective_user_id, session_id, message, reply)
+        return reply
+
+    # GREETING / CLOSING — same short-circuit pattern as OUT_OF_DOMAIN above.
+    # The Gemini classifier (not a regex/keyword list) is the sole mechanism
+    # that decides a message is a pure greeting or closing, including
+    # separating them from mixed messages like "good morning, show me
+    # concerts in Mumbai" (which the classifier resolves to EVENT_SEARCH
+    # instead - see the prompt in classify_intent). Once classified, no
+    # further Gemini generation call is needed for these two intents, so we
+    # reply directly and skip gemini_loop.run_agent() entirely.
+    if classification.intent == "GREETING":
+        logger.info("GREETING intent detected – short-circuiting before gemini_loop.run_agent()")
+        who = f" {name}" if name else ""
+        reply = (
+            f"Hey{who}! I'm LiveWire's booking assistant. "
+            "I can help you find concerts, movies, comedy shows, or other events, check ticket prices "
+            "and availability, or manage your bookings. What would you like to do?"
+        )
+        memory.save_turn("customer", effective_user_id, session_id, message, reply)
+        return reply
+
+    if classification.intent == "CLOSING":
+        logger.info("CLOSING intent detected – short-circuiting before gemini_loop.run_agent()")
+        who = f", {name}" if name else ""
+        reply = f"Take care{who}! Come back anytime you want to find or book an event."
         memory.save_turn("customer", effective_user_id, session_id, message, reply)
         return reply
 
