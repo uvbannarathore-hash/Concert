@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
+import { Sparkles } from 'lucide-react'
 
 export default function ReviewList({ eventId, artistId, venueId }) {
   const [reviews, setReviews] = useState([])
@@ -78,8 +79,9 @@ export default function ReviewList({ eventId, artistId, venueId }) {
 
       {aiSummary && (
         <div className="p-4 rounded-xl border border-spot/20 bg-spot/5">
-          <div className="flex items-center gap-2 mb-2">
-            <span className="text-sm font-semibold text-spot">✨ AI Summary</span>
+          <div className="flex items-center gap-1.5 mb-2">
+            <Sparkles className="w-4 h-4 text-spot flex-shrink-0" />
+            <span className="text-sm font-semibold text-spot">AI Summary</span>
           </div>
           <p className="text-sm text-haze leading-relaxed font-body">
             {aiSummary}
@@ -89,7 +91,9 @@ export default function ReviewList({ eventId, artistId, venueId }) {
 
       {aiLoading && !aiSummary && (
         <div className="p-4 rounded-xl border border-white/[0.04] bg-white/[0.01]">
-          <div className="text-xs font-mono text-haze animate-pulse">Generating ✨ AI Summary...</div>
+          <div className="text-xs font-mono text-haze animate-pulse flex items-center gap-1.5">
+            <Sparkles className="w-3.5 h-3.5 text-spot" /> Generating AI Summary...
+          </div>
         </div>
       )}
 

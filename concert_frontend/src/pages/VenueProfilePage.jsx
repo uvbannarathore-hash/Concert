@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { api } from '../lib/api'
+import { MapPin } from 'lucide-react'
 import ConcertCard from '../components/ConcertCard'
 import ReviewList from '../components/ReviewList'
 
@@ -91,7 +92,7 @@ export default function VenueProfilePage() {
             
             {venue.address && (
               <p className="text-haze/80 font-body text-base leading-relaxed mb-4 flex items-center gap-2 justify-center md:justify-start">
-                📍 {venue.address}
+                <MapPin className="w-4 h-4 text-spot flex-shrink-0" /> {venue.address}
               </p>
             )}
             

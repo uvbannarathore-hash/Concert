@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { QRCodeSVG } from 'qrcode.react'
 import { api, getPublicPassUrl } from '../lib/api'
+import { MapPin, Ticket } from 'lucide-react'
 import DigitalPassModal from '../components/DigitalPassModal'
 import ReviewModal from '../components/ReviewModal'
 
@@ -233,7 +234,7 @@ export default function BookingsPage() {
 
             {!loading && !error && bookings.length === 0 && (
         <div className="glass-card rounded-2xl p-12 text-center max-w-md mx-auto my-12 space-y-4">
-          <span className="text-4xl block">🎟️</span>
+          <div className="flex justify-center"><Ticket className="w-10 h-10 text-spot/50 stroke-[1.5]" /></div>
           <h2 className="font-display text-2xl text-paper uppercase">No Active Bookings</h2>
           <p className="text-xs text-haze leading-relaxed">
             You haven't reserved tickets for any upcoming live concerts yet. Explore the lineup and reserve your spot!
@@ -289,8 +290,8 @@ export default function BookingsPage() {
                     {eventDetails.artist_name || `Event ID: ${b.event_id}`}
                   </h3>
                   
-                  <p className="text-xs text-haze/80 font-semibold mt-1">
-                    📍 {eventDetails.venue_name || 'Venue'}, {eventDetails.city || 'City'}
+                  <p className="text-xs text-haze/80 font-semibold mt-1 flex items-center gap-1">
+                    <MapPin className="w-3.5 h-3.5 text-spot flex-shrink-0" /> {eventDetails.venue_name || 'Venue'}, {eventDetails.city || 'City'}
                   </p>
 
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-5 text-left font-mono text-[11px] text-haze">

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { QRCodeSVG } from 'qrcode.react'
 import { api, getPublicPassUrl } from '../lib/api'
+import { MapPin, CheckCircle2 } from 'lucide-react'
 import DigitalPassModal from '../components/DigitalPassModal'
 import ReviewList from '../components/ReviewList'
 
@@ -383,7 +384,9 @@ export default function ConcertDetailPage() {
   if (status === 'done') {
     return (
       <div className="max-w-md mx-auto px-6 py-16 animate-scale-in">
-        <p className="eyebrow text-center mb-2">🎉 TRANSACTION CONFIRMED</p>
+        <p className="eyebrow text-center mb-2 flex items-center justify-center gap-1">
+          <CheckCircle2 className="w-4 h-4 text-spot2 inline" /> TRANSACTION CONFIRMED
+        </p>
         <h1 className="font-display text-4xl text-center text-paper mb-8 uppercase tracking-wide">YOUR PASS IS LOCKED</h1>
 
         {/* Physical ticket pass representation */}
@@ -403,7 +406,9 @@ export default function ConcertDetailPage() {
             </div>
 
             <h2 className="font-display text-3xl tracking-wide mt-4 uppercase text-paper leading-tight">{event.artist_name}</h2>
-            <p className="text-xs text-haze/80 font-semibold mt-1 flex items-center gap-1">📍 {event.venue_name}, {event.city}</p>
+            <p className="text-xs text-haze/80 font-semibold mt-1 flex items-center gap-1">
+              <MapPin className="w-3.5 h-3.5 text-spot flex-shrink-0" /> {event.venue_name}, {event.city}
+            </p>
 
             <div className="grid grid-cols-2 gap-4 mt-6 text-left">
               <div>
@@ -530,7 +535,7 @@ export default function ConcertDetailPage() {
               </Link>
             </h1>
             <p className="text-base text-haze flex items-center gap-1">
-              📍 <Link to={`/venues/${event.venue_id}`} className="hover:underline hover:text-spot2 transition-colors">{event.venue_name}</Link> — {event.event_time}
+              <MapPin className="w-4 h-4 text-spot flex-shrink-0 inline" /> <Link to={`/venues/${event.venue_id}`} className="hover:underline hover:text-spot2 transition-colors">{event.venue_name}</Link> — {event.event_time}
             </p>
           </div>
 

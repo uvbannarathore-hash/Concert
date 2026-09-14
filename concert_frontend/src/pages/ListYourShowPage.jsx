@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
+import { MapPin } from 'lucide-react'
 
 const EVENT_TYPES = ['Concert', 'Movie', 'Comedy Show', 'Music Show', 'Play', 'Sports']
 
@@ -266,9 +267,9 @@ export default function ListYourShowPage() {
             <button
               type="button"
               onClick={() => setShowLocationPicker((s) => !s)}
-              className="text-xs font-mono px-3 py-1.5 rounded-lg border border-white/[0.06] text-haze hover:text-paper hover:border-spot/30 transition"
+              className="text-xs font-mono px-3 py-1.5 rounded-lg border border-white/[0.06] text-haze hover:text-paper hover:border-spot/30 transition flex items-center gap-1.5"
             >
-              📍 {venueLocation ? 'Change pin' : 'Search & pin venue'}
+              <MapPin className="w-3.5 h-3.5 text-spot" /> {venueLocation ? 'Change pin' : 'Search & pin venue'}
             </button>
             {venueLocation && (
               <span className="flex items-center gap-1.5 text-[10px] font-mono text-spot2 bg-spot2/5 border border-spot2/15 px-2.5 py-1 rounded-md">
