@@ -80,22 +80,38 @@ async def run_agent(
     
     executed_calls = set()
 
+    import asyncio
+
     for _ in range(MAX_TOOL_ITERATIONS):
-        try:
-            rough_char_count = len(str(contents))
-            logger.info(f"Gemini API request: Iteration {_}, Context size roughly {rough_char_count} chars")
-            
-            response = _client.models.generate_content(
-                model=MODEL_NAME,
-                contents=contents,
-                config=config,
-            )
-        except Exception as e:
-            err_str = str(e)
-            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                logger.error(f"Gemini API quota exhausted (429): {err_str}")
-                return "The system is currently experiencing high demand and AI quota is temporarily exhausted. Please try again in a few moments."
-            raise
+        max_503_retries = 1
+        response = None
+        for attempt in range(max_503_retries + 1):
+            try:
+                rough_char_count = len(str(contents))
+                logger.info(f"Gemini API request: Iteration {_}, Context size roughly {rough_char_count} chars")
+                
+                response = _client.models.generate_content(
+                    model=MODEL_NAME,
+                    contents=contents,
+                    config=config,
+                )
+                break
+            except Exception as e:
+                err_str = str(e)
+                if "503" in err_str or "UNAVAILABLE" in err_str:
+                    if attempt < max_503_retries:
+                        backoff = 1
+                        logger.warning(f"Gemini 503 UNAVAILABLE. Retrying in {backoff}s (attempt {attempt+1}/{max_503_retries})...")
+                        await asyncio.sleep(backoff)
+                        continue
+                    else:
+                        logger.error(f"Gemini 503 UNAVAILABLE exhausted retries: {err_str}")
+                        return "The AI service is temporarily unavailable due to high demand. Please try again in a few moments."
+                
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    logger.error(f"Gemini API quota exhausted (429): {err_str}")
+                    return "The system is currently experiencing high demand and AI quota is temporarily exhausted. Please try again in a few moments."
+                raise
 
         candidate = response.candidates[0]
         parts = candidate.content.parts or []

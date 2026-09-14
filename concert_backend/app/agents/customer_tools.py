@@ -237,29 +237,147 @@ def link_telegram_account(chat_id: str, email: str) -> dict:
 # Concierge Agent Tools (Mocked external APIs)
 # ---------------------------------------------------------------------------
 
-def maps_directions(origin: str, destination: str) -> dict:
-    """Mock Mapbox/Google Maps directions API."""
-    # Deterministic mock based on length of strings to simulate varying times
-    dist_km = (len(origin) + len(destination)) % 15 + 2
-    time_mins = dist_km * 4
-    cab_fare = dist_km * 20 + 50
+def _get_venue_coordinates(event_id: str) -> tuple[float, float] | None:
+    """Helper to fetch venue coordinates for a given event_id."""
+    result = supabase_admin.table("events").select("venue_id, latitude, longitude").eq("event_id", event_id).execute()
+    if result.data:
+        row = result.data[0]
+        # check event row first
+        if row.get("latitude") is not None and row.get("longitude") is not None:
+            return float(row["latitude"]), float(row["longitude"])
+        # fallback to venues table if event doesn't have it explicitly duplicated
+        if row.get("venue_id"):
+            v_result = supabase_admin.table("venues").select("latitude, longitude").eq("venue_id", row["venue_id"]).execute()
+            if v_result.data and v_result.data[0].get("latitude") is not None:
+                return float(v_result.data[0]["latitude"]), float(v_result.data[0]["longitude"])
+    return None
+
+import logging
+import httpx
+import math
+from functools import lru_cache
+
+logger = logging.getLogger("customer_tools")
+
+@lru_cache(maxsize=128)
+def maps_directions(event_id: str, destination_lat: float, destination_lon: float) -> dict:
+    """Real OSM OSRM directions API."""
+    coords = _get_venue_coordinates(event_id)
+    if not coords:
+        return {"success": False, "message": "Could not determine origin venue coordinates."}
+    
+    origin_lat, origin_lon = coords
+    
+    # Try public OSRM for driving route
+    try:
+        url = f"https://router.project-osrm.org/route/v1/driving/{origin_lon},{origin_lat};{destination_lon},{destination_lat}?overview=false"
+        resp = httpx.get(url, timeout=5.0, headers={"User-Agent": "ConcertApp/1.0"})
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("code") == "Ok" and data.get("routes"):
+            route = data["routes"][0]
+            dist_km = route["distance"] / 1000.0
+            time_mins = route["duration"] / 60.0
+            cab_fare = dist_km * 20 + 50
+            return {
+                "success": True,
+                "distance_km": round(dist_km, 2),
+                "estimated_time_mins": round(time_mins),
+                "estimated_cab_fare_inr": round(cab_fare),
+                "mode": "driving",
+                "is_fallback": False
+            }
+    except Exception as e:
+        logger.error(f"OSRM failed: {e}")
+    
+    # Haversine deterministic fallback
+    lat1, lon1 = math.radians(origin_lat), math.radians(origin_lon)
+    lat2, lon2 = math.radians(destination_lat), math.radians(destination_lon)
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+    a = math.sin(dlat / 2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    dist_km = 6371 * c
+    
+    # Driving is usually ~1.3x straight line distance
+    driving_dist_km = dist_km * 1.3
+    time_mins = driving_dist_km * 3 # roughly 20km/h
+    cab_fare = driving_dist_km * 20 + 50
     return {
         "success": True,
-        "distance_km": dist_km,
-        "estimated_time_mins": time_mins,
-        "estimated_cab_fare_inr": cab_fare,
-        "mode": "driving"
+        "distance_km": round(driving_dist_km, 2),
+        "estimated_time_mins": round(time_mins),
+        "estimated_cab_fare_inr": round(cab_fare),
+        "mode": "driving",
+        "is_fallback": True,
+        "message": "Used estimated straight-line routing due to OSM routing unavailability."
     }
 
-def restaurant_suggestions(city: str, budget_inr: float = 1500) -> dict:
-    """Mock Zomato/Google Places restaurant search."""
-    # Deterministic mock
+@lru_cache(maxsize=128)
+def restaurant_suggestions(event_id: str, budget_inr: float = 1500) -> dict:
+    """Real OSM Overpass API restaurant search near the venue."""
+    coords = _get_venue_coordinates(event_id)
+    if not coords:
+        return {"success": False, "message": "Could not determine event venue coordinates to find nearby restaurants."}
+    
+    lat, lon = coords
+    
+    # Bounding box roughly 2km
+    lat_delta = 0.02
+    lon_delta = 0.02
+    
+    restaurants = []
+    
+    try:
+        # Fetch from local Supabase cache instead of live Overpass API
+        result = supabase_admin.table("restaurants").select("*") \
+            .gte("latitude", lat - lat_delta).lte("latitude", lat + lat_delta) \
+            .gte("longitude", lon - lon_delta).lte("longitude", lon + lon_delta) \
+            .execute()
+            
+        if result.data:
+            for row in result.data:
+                r_lat = row["latitude"]
+                r_lon = row["longitude"]
+                
+                # Calculate exact Haversine distance
+                lat1, lon1 = math.radians(lat), math.radians(lon)
+                lat2, lon2 = math.radians(r_lat), math.radians(r_lon)
+                dlon = lon2 - lon1
+                dlat = lat2 - lat1
+                a = math.sin(dlat / 2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2)**2
+                c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+                dist_km = 6371 * c
+                
+                # Filter by 2000m radius and budget
+                if dist_km <= 2.0:
+                    base_cost = row.get("estimated_cost_for_two_inr") or 1500
+                    if base_cost <= budget_inr * 1.5:
+                        restaurants.append({
+                            "name": row["name"],
+                            "cuisine": row.get("cuisine", "Mixed"),
+                            "lat": r_lat,
+                            "lon": r_lon,
+                            "estimated_cost_for_two_inr": base_cost,
+                            "is_cost_estimated": True
+                        })
+            
+            if restaurants:
+                logger.info("Plan My Night restaurants: Returning CACHED OSM data")
+                return {"success": True, "restaurants": restaurants[:5], "is_fallback": False}
+    except Exception as e:
+        logger.warning(f"Failed to query cached restaurants ({e}). Falling back instantly.")
+            
+    # Fallback to static mock data near the venue coordinates
+    logger.info("Plan My Night restaurants: Returning FALLBACK data")
     return {
         "success": True,
+        "is_fallback": True,
+        "message": "Live OSM restaurant search unavailable; returning fallback suggestions.",
         "restaurants": [
-            {"name": "The Grand Local", "cuisine": "North Indian", "cost_for_two": 1200, "rating": 4.5, "distance_from_center_km": 2},
-            {"name": "Spice Route", "cuisine": "Pan Asian", "cost_for_two": 1800, "rating": 4.2, "distance_from_center_km": 3.5},
-            {"name": "Bistro Cafe", "cuisine": "Continental", "cost_for_two": 800, "rating": 4.1, "distance_from_center_km": 1.5}
+            {"name": "The Grand Local (Fallback)", "cuisine": "North Indian", "lat": lat + 0.001, "lon": lon + 0.001, "estimated_cost_for_two_inr": 1200, "is_cost_estimated": True},
+            {"name": "Spice Route (Fallback)", "cuisine": "Pan Asian", "lat": lat - 0.002, "lon": lon + 0.002, "estimated_cost_for_two_inr": 1800, "is_cost_estimated": True},
+            {"name": "Bistro Cafe (Fallback)", "cuisine": "Continental", "lat": lat + 0.003, "lon": lon - 0.001, "estimated_cost_for_two_inr": 800, "is_cost_estimated": True}
         ]
     }
 
@@ -456,26 +574,27 @@ FUNCTION_DECLARATIONS = [
     },
     {
         "name": "maps_directions",
-        "description": "Mock tool to estimate travel distance and time between two locations (e.g. from event venue to restaurant). Returns distance, estimated time, and estimated cab fare.",
+        "description": "Real OSM OSRM directions API to estimate travel distance and time from the event venue to a destination (e.g., restaurant). Returns real driving distance, estimated time, and estimated cab fare.",
         "parameters": {
             "type": "object",
             "properties": {
-                "origin": {"type": "string", "description": "Starting location"},
-                "destination": {"type": "string", "description": "Ending location"}
+                "event_id": {"type": "string", "description": "The event ID to use as the starting location (venue coordinates)."},
+                "destination_lat": {"type": "number", "description": "Latitude of the destination (e.g. the selected restaurant)."},
+                "destination_lon": {"type": "number", "description": "Longitude of the destination."}
             },
-            "required": ["origin", "destination"]
+            "required": ["event_id", "destination_lat", "destination_lon"]
         }
     },
     {
         "name": "restaurant_suggestions",
-        "description": "Mock tool to suggest restaurants in a city within a given budget. Returns a list of restaurants.",
+        "description": "Real OSM Overpass API restaurant search near the event venue within a given budget. Returns a list of real nearby restaurants with coordinates.",
         "parameters": {
             "type": "object",
             "properties": {
-                "city": {"type": "string", "description": "City to search in"},
-                "budget_inr": {"type": "number", "description": "Budget in INR for dining"}
+                "event_id": {"type": "string", "description": "The event ID to search near (uses exact venue coordinates)."},
+                "budget_inr": {"type": "number", "description": "Budget in INR for dining. Will filter out overly expensive estimated restaurants."}
             },
-            "required": ["city"]
+            "required": ["event_id"]
         }
     },
     {

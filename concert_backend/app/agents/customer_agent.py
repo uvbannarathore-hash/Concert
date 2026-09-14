@@ -138,8 +138,8 @@ If the user explicitly corrects what an ordinal refers to (for example, "the thi
 PLAN MY NIGHT CONCIERGE WORKFLOW:
 When the user asks to "Plan My Night" or coordinate a full evening (including events, dinner, and travel) based on a budget, group size, and city:
 1. Search Events: Use search_events to find matching events in the specified city/date. Pick a good event and use get_ticket_categories to check prices.
-2. Suggest Restaurants: Use restaurant_suggestions to find dinner options in the same city.
-3. Estimate Travel: Use maps_directions to estimate travel time and cab fare between the event venue and the restaurant.
+2. Suggest Restaurants: Use restaurant_suggestions(event_id, budget_inr) to find real OSM dinner options near the exact event venue. Pay attention to the returned coordinates and estimated costs (which are deterministic estimates if not in OSM).
+3. Estimate Travel: Use maps_directions(event_id, destination_lat, destination_lon) using the exact lat/lon returned from the selected restaurant to get real OSRM driving distance and time from the venue. DO NOT invent coordinates or travel times.
 4. Build Itinerary: Use the build_itinerary tool with the ticket price, group size, cab fare, and restaurant cost to deterministically calculate the grand total.
 5. Ask Confirmation: Present this complete itinerary (events, restaurants, travel, and the deterministic grand total) clearly to the user. Ask if they approve the plan. DO NOT book anything or save the itinerary yet.
 6. Finalize: Once the user explicitly approves the itinerary, FIRST use the save_itinerary tool to store the plan (pass the chosen event_id and the full plan as a JSON string), THEN use book_ticket_transaction to initiate the booking and present the payment link.
@@ -316,34 +316,48 @@ If there is no recent context provided, context_needed MUST be false.
     else:
         recent_history = "None (this is the first message)"
 
-    try:
-        res = _client.models.generate_content(
-            model="gemini-3.1-flash-lite",
-            contents=[
-                types.Content(role="user", parts=[
-                    types.Part.from_text(text=f"{prompt}\n\nRecent context:\n{recent_history}\n\nUser Message: {message}")
-                ])
-            ],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=IntentClassification,
+    import time
+    max_503_retries = 1
+    
+    for attempt in range(max_503_retries + 1):
+        try:
+            res = _client.models.generate_content(
+                model="gemini-3.1-flash-lite",
+                contents=[
+                    types.Content(role="user", parts=[
+                        types.Part.from_text(text=f"{prompt}\n\nRecent context:\n{recent_history}\n\nUser Message: {message}")
+                    ])
+                ],
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=IntentClassification,
+                )
             )
-        )
-        data = json.loads(res.text)
-        logger.info(f"Classifier result: {data}")
-        return IntentClassification(**data)
-    except Exception as e:
-        logger.error(f"Intent classification failed: {e}")
-        # Fail safe, not fail closed: we deliberately do NOT default to
-        # EVENT_SEARCH here. Mislabeling a classifier failure as a
-        # confident "EVENT_SEARCH" is exactly how an unknown/general
-        # question used to silently sail through as if it had been
-        # correctly classified. "UNKNOWN" is a distinct, non-committal
-        # value: _run() treats it as "let the general agent (and the
-        # DOMAIN SCOPE hard rule in SYSTEM_PROMPT) handle it" rather than
-        # either blocking a possibly-legitimate booking query or quietly
-        # relabeling it as something it was never actually classified as.
-        return IntentClassification(intent="UNKNOWN", context_needed=True)
+            data = json.loads(res.text)
+            logger.info(f"Classifier result: {data}")
+            return IntentClassification(**data)
+        except Exception as e:
+            err_str = str(e)
+            if "503" in err_str or "UNAVAILABLE" in err_str:
+                if attempt < max_503_retries:
+                    backoff = 1
+                    logger.warning(f"Intent classifier Gemini 503 UNAVAILABLE. Retrying in {backoff}s (attempt {attempt+1}/{max_503_retries})...")
+                    time.sleep(backoff)
+                    continue
+            
+            logger.error(f"Intent classification failed: {e}")
+            break
+            
+    # Fail safe, not fail closed: we deliberately do NOT default to
+    # EVENT_SEARCH here. Mislabeling a classifier failure as a
+    # confident "EVENT_SEARCH" is exactly how an unknown/general
+    # question used to silently sail through as if it had been
+    # correctly classified. "UNKNOWN" is a distinct, non-committal
+    # value: _run() treats it as "let the general agent (and the
+    # DOMAIN SCOPE hard rule in SYSTEM_PROMPT) handle it" rather than
+    # either blocking a possibly-legitimate booking query or quietly
+    # relabeling it as something it was never actually classified as.
+    return IntentClassification(intent="UNKNOWN", context_needed=True)
 
 
 async def _run(effective_user_id: str, session_id: str, name: str, is_admin: bool, message: str, chat_id: str | None) -> str:
