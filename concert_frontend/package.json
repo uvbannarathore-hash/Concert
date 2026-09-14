@@ -4,13 +4,16 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --host",
+    "dev": "npx concurrently -n \"backend,frontend\" -c \"cyan,magenta\" \"cd ../concert_backend && .\\venv\\Scripts\\python.exe -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000\" \"vite --host\"",
+    "dev:all": "npx concurrently -n \"backend,frontend,tunnel\" -c \"cyan,magenta,yellow\" \"cd ../concert_backend && .\\venv\\Scripts\\python.exe -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000\" \"vite --host\" \"npx --yes cloudflared tunnel --url http://localhost:5173\"",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@heroicons/react": "^2.2.0",
     "@supabase/supabase-js": "^2.112.4",
     "livekit-client": "^2.7.0",
+    "lucide-react": "^1.45.0",
     "qrcode.react": "^4.2.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -20,6 +23,7 @@
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
     "autoprefixer": "^10.4.20",
+    "concurrently": "^8.2.2",
     "postcss": "^8.4.45",
     "tailwindcss": "^3.4.10",
     "vite": "^5.4.6"

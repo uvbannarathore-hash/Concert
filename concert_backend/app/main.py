@@ -45,16 +45,16 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(status_code=422, content={"detail": detail})
 
 # Allow the frontend (running on a different port/domain) to call this API.
-# Stable production + local-dev origins only - do not hardcode one-off
-# preview-deployment URLs here (they churn constantly and just accumulate
-# as dead config). Add a temporary preview URL via the EXTRA_CORS_ORIGINS
-# env var instead (comma-separated), see app/config.py.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "https://events-two-phi.vercel.app",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "https://events-o0v9jffi9-yuvraj-e83c.vercel.app",
+        "https://concert-new-one.vercel.app",
     ] + EXTRA_CORS_ORIGINS,
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+|.*\.loca\.lt|.*\.trycloudflare\.com)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

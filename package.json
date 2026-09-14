@@ -1,0 +1,9 @@
+{
+  "name": "concert-system-root",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix concert_frontend run dev",
+    "dev:all": "npm --prefix concert_frontend run dev:all"
+  }
+}

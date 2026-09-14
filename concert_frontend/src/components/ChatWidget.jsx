@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { api } from '../lib/api'
 import { createClient } from '@supabase/supabase-js'
+import { MessageSquare, Sparkles, User, X, Send, AlertCircle } from 'lucide-react'
 
 // Supabase client for realtime updates
 const supabase = createClient(
@@ -66,9 +67,6 @@ export default function ChatWidget() {
     return () => window.removeEventListener('storage', checkLogin)
   }, [location.pathname])
 
-  // Admins get their own agent-chat inside the Admin dashboard - this
-  // customer-facing widget should stay hidden for them, same as NavBar
-  // only shows the customer nav links to non-admins.
   useEffect(() => {
     if (!loggedIn) {
       setIsAdmin(null)
@@ -111,7 +109,7 @@ export default function ChatWidget() {
               ...m,
               {
                 role: 'assistant',
-                text: `🎉 Your booking is confirmed!\n\nBooking ID: ${b.booking_id}\nCategory: ${b.category}\nSeats: ${b.seats_booked}\n\nSee you at the show!`,
+                text: `Your booking is confirmed!\n\nBooking ID: ${b.booking_id}\nCategory: ${b.category}\nSeats: ${b.seats_booked}\n\nSee you at the show!`,
               },
             ])
             setIsOpen(true) // Open widget to notify user
@@ -141,7 +139,6 @@ export default function ChatWidget() {
     const text = input.trim()
     if (!text || sending) return
     
-    
     if (!loggedIn) {
       setError('Please log in to chat with the assistant.')
       return
@@ -167,13 +164,11 @@ export default function ChatWidget() {
       setSending(false)
     }
   }
-    // Only render floating chat assistant for logged-in, confirmed non-admin
-  // customers. isAdmin === null means "not checked yet" - stay hidden until
-  // we know for sure, otherwise it flashes visible until the profile fetch
-  // resolves and then disappears.
+
   if (!loggedIn || isAdmin !== false) {
     return null
   }
+
   return (
     <>
       {/* Floating Action Button (FAB) */}
@@ -183,7 +178,12 @@ export default function ChatWidget() {
         title="Chat Booking Assistant"
         aria-label="Open Chat Assistant"
       >
-        <span className="text-xl">{isOpen ? '✕' : '💬'}</span>
+        {isOpen ? (
+          <X className="w-6 h-6 text-void" />
+        ) : (
+          <MessageSquare className="w-6 h-6 text-void fill-current" />
+        )}
+
         {!isOpen && (
           <span className="absolute top-0 right-0 flex h-3.5 w-3.5">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-spot2 opacity-75"></span>
@@ -209,9 +209,10 @@ export default function ChatWidget() {
             </div>
             <button 
               onClick={() => setIsOpen(false)}
-              className="text-haze hover:text-paper text-xs font-mono px-2 py-1 rounded hover:bg-white/[0.05] transition"
-              >
-              ✕
+              className="text-haze hover:text-paper p-1 rounded hover:bg-white/[0.05] transition"
+              title="Close"
+            >
+              <X className="w-4 h-4" />
             </button>
           </div>
 
@@ -223,8 +224,8 @@ export default function ChatWidget() {
                 return (
                   <div key={i} className={`flex gap-2.5 items-end ${isUser ? 'justify-end' : 'justify-start'} animate-scale-in`}>
                     {!isUser && (
-                      <span className="w-6 h-6 rounded-full border border-spot2/20 bg-spot2/5 text-spot2 font-mono text-[10px] flex items-center justify-center flex-shrink-0">
-                        🤖
+                      <span className="w-6 h-6 rounded-full border border-spot2/20 bg-spot2/10 text-spot2 flex items-center justify-center flex-shrink-0">
+                        <Sparkles className="w-3.5 h-3.5 text-spot2" />
                       </span>
                     )}
                     <div
@@ -237,8 +238,8 @@ export default function ChatWidget() {
                       {linkify(m.text)}
                     </div>
                     {isUser && (
-                      <span className="w-6 h-6 rounded-full border border-spot/20 bg-spot/5 text-spot font-mono text-[10px] flex items-center justify-center flex-shrink-0">
-                        👤
+                      <span className="w-6 h-6 rounded-full border border-spot/20 bg-spot/10 text-spot flex items-center justify-center flex-shrink-0">
+                        <User className="w-3.5 h-3.5 text-spot" />
                       </span>
                     )}
                   </div>
@@ -247,8 +248,8 @@ export default function ChatWidget() {
               
               {sending && (
                 <div className="flex gap-2.5 items-end justify-start animate-pulse">
-                  <span className="w-6 h-6 rounded-full border border-spot2/20 bg-spot2/5 text-spot2 font-mono text-[10px] flex items-center justify-center flex-shrink-0">
-                    🤖
+                  <span className="w-6 h-6 rounded-full border border-spot2/20 bg-spot2/10 text-spot2 flex items-center justify-center flex-shrink-0">
+                    <Sparkles className="w-3.5 h-3.5 text-spot2" />
                   </span>
                   <div className="bg-stage2 border border-white/[0.04] rounded-xl rounded-bl-sm px-3 py-2 text-xs text-haze">
                     Thinking…
@@ -260,7 +261,10 @@ export default function ChatWidget() {
           </div>
 
           {error && (
-            <p className="text-[10px] text-spot font-mono mb-2 px-1">⚠️ Error: {error}</p>
+            <div className="flex items-center gap-1.5 text-[10px] text-spot font-mono mb-2 px-1">
+              <AlertCircle className="w-3.5 h-3.5" />
+              <span>Error: {error}</span>
+            </div>
           )}
 
           {/* Form Action */}
@@ -272,8 +276,8 @@ export default function ChatWidget() {
               placeholder="Ask anything (e.g. 'Show me concerts')..."
               disabled={sending}
             />
-            <button type="submit" disabled={sending || !input.trim()} className="btn-spot !px-4 !py-2 text-xs font-bold disabled:opacity-40">
-              Send
+            <button type="submit" disabled={sending || !input.trim()} className="btn-spot !px-3.5 !py-2 text-xs font-bold disabled:opacity-40 flex items-center gap-1">
+              <Send className="w-3.5 h-3.5" />
             </button>
           </form>
         </div>
@@ -281,3 +285,4 @@ export default function ChatWidget() {
     </>
   )
 }
+

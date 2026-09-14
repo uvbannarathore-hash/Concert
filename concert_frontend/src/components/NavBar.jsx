@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
+import { User, LogOut, ShieldCheck, Search, X, ChevronDown, Menu } from 'lucide-react'
 
 export default function NavBar() {
   const navigate = useNavigate()
@@ -90,15 +91,13 @@ export default function NavBar() {
             placeholder="Search shows, cities..."
             className="field !py-2 !pl-9 !pr-8 text-xs bg-stage/40 border border-white/[0.04] focus:bg-stage focus:border-spot/40 transition-all duration-300"
           />
-          <svg className="w-3.5 h-3.5 text-haze/60 absolute left-3 top-2.5" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
-          </svg>
+          <Search className="w-3.5 h-3.5 text-haze/60 absolute left-3 top-2.5" />
           {searchVal && (
             <button 
               onClick={() => handleSearchChange('')}
               className="absolute right-3.5 top-2 text-xs text-haze hover:text-paper font-bold"
             >
-              ✕
+              <X className="w-3.5 h-3.5" />
             </button>
           )}
         </div>
@@ -135,9 +134,7 @@ export default function NavBar() {
                   {firstName.charAt(0)}
                 </span>
                 <span className="text-sm font-semibold text-paper max-w-[100px] truncate">{firstName}</span>
-                <svg className={`w-4 h-4 text-haze transition-transform duration-300 ${dropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7"></path>
-                </svg>
+                <ChevronDown className={`w-4 h-4 text-haze transition-transform duration-300 ${dropdownOpen ? 'rotate-180' : ''}`} />
               </button>
 
               {dropdownOpen && (
@@ -147,13 +144,15 @@ export default function NavBar() {
                     onClick={() => setDropdownOpen(false)}
                     className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-paper hover:bg-stage2/60 transition duration-200"
                   >
-                    👤 Profile
+                    <User className="w-4 h-4 text-paper" />
+                    <span>Profile</span>
                   </Link>
                   <button 
                     onClick={handleLogout}
                     className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-spot hover:bg-spot/10 text-left transition duration-200"
                   >
-                    🚪 Log out
+                    <LogOut className="w-4 h-4 text-spot" />
+                    <span>Log out</span>
                   </button>
                 </div>
               )}
@@ -171,13 +170,7 @@ export default function NavBar() {
           className="md:hidden flex items-center justify-center w-9 h-9 rounded-lg border border-white/[0.04] bg-stage2/40 hover:bg-stage2/80 transition outline-none"
           aria-label="Toggle menu"
         >
-          <svg className="w-5 h-5 text-paper" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-            {mobileMenuOpen ? (
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12"></path>
-            ) : (
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16"></path>
-            )}
-          </svg>
+          {mobileMenuOpen ? <X className="w-5 h-5 text-paper" /> : <Menu className="w-5 h-5 text-paper" />}
         </button>
 
       </div>
@@ -195,15 +188,13 @@ export default function NavBar() {
               placeholder="Search shows, cities..."
               className="field !py-2 !pl-10 !pr-8 text-sm w-full"
             />
-            <svg className="w-4 h-4 text-haze/60 absolute left-3.5 top-5" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
-            </svg>
+            <Search className="w-4 h-4 text-haze/60 absolute left-3.5 top-5" />
             {searchVal && (
               <button 
                 onClick={() => handleSearchChange('')}
                 className="absolute right-3.5 top-4.5 text-xs text-haze hover:text-paper font-bold"
               >
-                ✕
+                <X className="w-4 h-4" />
               </button>
             )}
           </div>
@@ -216,15 +207,20 @@ export default function NavBar() {
               {!profile?.is_admin && (
                 <Link to="/list-your-show" className="text-base font-medium text-paper py-1 border-b border-white/[0.02]">List Your Show</Link>
               )}
-              <Link to="/profile" className="text-base font-medium text-paper py-1 border-b border-white/[0.02]">👤 Profile ({firstName})</Link>
+              <Link to="/profile" className="flex items-center gap-2 text-base font-medium text-paper py-1 border-b border-white/[0.02]">
+                <User className="w-4 h-4" /> Profile ({firstName})
+              </Link>
               {profile?.is_admin && (
-                <Link to="/admin" className="text-base font-medium text-spot2 py-1 border-b border-white/[0.02]">⚙️ Admin Backend</Link>
+                <Link to="/admin" className="flex items-center gap-2 text-base font-medium text-spot2 py-1 border-b border-white/[0.02]">
+                  <ShieldCheck className="w-4 h-4" /> Admin Backend
+                </Link>
               )}
               <button 
                 onClick={handleLogout}
-                className="w-full text-center py-2.5 rounded-xl border border-spot/30 text-spot font-bold hover:bg-spot/5 transition"
+                className="w-full text-center py-2.5 rounded-xl border border-spot/30 text-spot font-bold hover:bg-spot/5 transition flex items-center justify-center gap-2"
               >
-                Log out
+                <LogOut className="w-4 h-4" />
+                <span>Log out</span>
               </button>
             </>
           ) : (
@@ -236,4 +232,4 @@ export default function NavBar() {
       )}
     </header>
   )
-}
+}

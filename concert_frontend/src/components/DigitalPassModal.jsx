@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { QRCodeSVG } from 'qrcode.react'
 import { Link } from 'react-router-dom'
 import { getPublicPassUrl } from '../lib/api'
+import { X, Calendar, Printer, Share2, Check, ExternalLink, MapPin } from 'lucide-react'
 
 export default function DigitalPassModal({ isOpen, onClose, booking }) {
   const [copied, setCopied] = useState(false)
@@ -113,10 +114,10 @@ export default function DigitalPassModal({ isOpen, onClose, booking }) {
           </div>
           <button 
             onClick={onClose}
-            className="text-haze hover:text-paper text-sm w-7 h-7 rounded-full bg-white/[0.05] hover:bg-white/10 flex items-center justify-center transition"
+            className="text-haze hover:text-paper w-7 h-7 rounded-full bg-white/[0.05] hover:bg-white/10 flex items-center justify-center transition"
             aria-label="Close modal"
           >
-            ✕
+            <X className="w-4 h-4" />
           </button>
         </div>
 
@@ -143,8 +144,9 @@ export default function DigitalPassModal({ isOpen, onClose, booking }) {
               <h3 className="font-display text-2xl tracking-wide uppercase text-paper truncate mt-1">
                 {eventDetails.artist_name || 'Live Event'}
               </h3>
-              <p className="text-xs text-haze truncate">
-                📍 {eventDetails.venue_name || 'Venue'}, {eventDetails.city || 'City'}
+              <p className="text-xs text-haze truncate flex items-center gap-1 mt-0.5">
+                <MapPin className="w-3 h-3 text-spot flex-shrink-0" />
+                <span>{eventDetails.venue_name || 'Venue'}, {eventDetails.city || 'City'}</span>
               </p>
             </div>
           </div>
@@ -212,13 +214,15 @@ export default function DigitalPassModal({ isOpen, onClose, booking }) {
                   onClick={handleAddToGoogleCalendar}
                   className="w-full text-left px-3 py-2 text-xs font-mono text-paper hover:text-white hover:bg-white/[0.08] rounded-lg transition flex items-center gap-2"
                 >
-                  <span>📅</span> Google Calendar
+                  <Calendar className="w-3.5 h-3.5 text-spot2" />
+                  <span>Google Calendar</span>
                 </button>
                 <button
                   onClick={handleDownloadICS}
                   className="w-full text-left px-3 py-2 text-xs font-mono text-paper hover:text-white hover:bg-white/[0.08] rounded-lg transition flex items-center gap-2"
                 >
-                  <span>🍏</span> Apple / Outlook (.ics)
+                  <Calendar className="w-3.5 h-3.5 text-spot" />
+                  <span>Apple / Outlook (.ics)</span>
                 </button>
               </div>
             )}
@@ -229,7 +233,7 @@ export default function DigitalPassModal({ isOpen, onClose, booking }) {
                 className={`btn-ghost !py-2 !px-2 text-[10px] font-mono uppercase flex flex-col items-center justify-center gap-1 hover:border-spot2/30 ${showCalendarMenu ? 'border-spot2 text-white' : ''}`}
                 title="Add to Google Calendar or download .ics"
               >
-                <span>📅</span>
+                <Calendar className="w-3.5 h-3.5 text-spot2" />
                 <span>Calendar</span>
               </button>
               <button
@@ -237,7 +241,7 @@ export default function DigitalPassModal({ isOpen, onClose, booking }) {
                 className="btn-ghost !py-2 !px-2 text-[10px] font-mono uppercase flex flex-col items-center justify-center gap-1 hover:border-spot/30"
                 title="Print or save PDF pass"
               >
-                <span>🖨️</span>
+                <Printer className="w-3.5 h-3.5 text-spot" />
                 <span>Print Pass</span>
               </button>
               <button
@@ -245,7 +249,7 @@ export default function DigitalPassModal({ isOpen, onClose, booking }) {
                 className="btn-ghost !py-2 !px-2 text-[10px] font-mono uppercase flex flex-col items-center justify-center gap-1 hover:border-go/30"
                 title="Copy public verification link"
               >
-                <span>{copied ? '✓' : '🔗'}</span>
+                {copied ? <Check className="w-3.5 h-3.5 text-go" /> : <Share2 className="w-3.5 h-3.5 text-go" />}
                 <span>{copied ? 'Copied!' : 'Share Pass'}</span>
               </button>
             </div>
@@ -255,9 +259,10 @@ export default function DigitalPassModal({ isOpen, onClose, booking }) {
           <Link
             to={`/ticket/${booking.booking_id}`}
             onClick={onClose}
-            className="block text-center text-xs font-mono text-spot hover:underline tracking-wider uppercase pt-1"
+            className="flex items-center justify-center gap-1 text-xs font-mono text-spot hover:underline tracking-wider uppercase pt-1"
           >
-            Open Dedicated Verification Page →
+            <span>Open Dedicated Verification Page</span>
+            <ExternalLink className="w-3 h-3" />
           </Link>
 
         </div>
@@ -266,4 +271,4 @@ export default function DigitalPassModal({ isOpen, onClose, booking }) {
   )
 
   return createPortal(modalContent, document.body)
-}
+}
