@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { QRCodeSVG } from 'qrcode.react'
 import { api, getPublicPassUrl } from '../lib/api'
+import { MapPin, Calendar } from 'lucide-react'
 
 export default function TicketPassPage() {
   const { bookingId } = useParams()
@@ -192,7 +193,7 @@ export default function TicketPassPage() {
         <div className="p-6 space-y-6">
           
           <div className="flex items-center gap-2 text-xs text-haze/90 font-medium">
-            <span>📍</span>
+            <MapPin className="w-4 h-4 text-spot inline" />
             <span className="text-paper font-semibold">{eventDetails.venue_name || 'Venue Name'}</span>
             <span>·</span>
             <span>{eventDetails.city || 'City'}</span>
@@ -270,13 +271,13 @@ export default function TicketPassPage() {
                   onClick={handleAddToGoogleCalendar}
                   className="w-full text-left px-3 py-2 text-xs font-mono text-paper hover:text-white hover:bg-white/[0.08] rounded-lg transition flex items-center gap-2"
                 >
-                  <span>📅</span> Google Calendar
+                  <Calendar className="w-3.5 h-3.5 text-spot inline" /> Google Calendar
                 </button>
                 <button
                   onClick={handleDownloadICS}
                   className="w-full text-left px-3 py-2 text-xs font-mono text-paper hover:text-white hover:bg-white/[0.08] rounded-lg transition flex items-center gap-2"
                 >
-                  <span>🍏</span> Apple / Outlook (.ics)
+                  <Calendar className="w-3.5 h-3.5 text-spot2 inline" /> Apple / Outlook (.ics)
                 </button>
               </div>
             )}
@@ -287,7 +288,7 @@ export default function TicketPassPage() {
                 className={`btn-ghost !py-2.5 !px-3 text-xs font-mono uppercase flex flex-col items-center justify-center gap-1 hover:border-spot2/30 ${showCalendarMenu ? 'border-spot2 text-white' : ''}`}
                 title="Add to Google Calendar or download .ics"
               >
-                <span>📅</span>
+                <Calendar className="w-4 h-4 text-spot flex-shrink-0" />
                 <span>Calendar</span>
               </button>
               <button

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
+import { User, Bot, MessageSquare } from 'lucide-react'
 import { createClient } from '@supabase/supabase-js'
 
 // Realtime uses the publishable key only - never the secret key in frontend code.
@@ -166,7 +167,7 @@ export default function ChatPage() {
                 {/* User avatar indicator */}
                 {isUser && (
                   <span className="w-8 h-8 rounded-full border border-spot/20 bg-spot/5 text-spot font-mono text-xs flex items-center justify-center flex-shrink-0">
-                    👤
+                    <User className="w-4 h-4" />
                   </span>
                 )}
               </div>
@@ -177,7 +178,7 @@ export default function ChatPage() {
           {sending && (
             <div className="flex gap-3 items-end justify-start animate-pulse">
               <span className="w-8 h-8 rounded-full border border-spot2/20 bg-spot2/5 text-spot2 font-mono text-xs flex items-center justify-center flex-shrink-0">
-                🤖
+                <Bot className="w-4 h-4" />
               </span>
               <div className="bg-stage border border-white/[0.04] rounded-2xl rounded-bl-sm px-5 py-4 flex items-center gap-1.5 shadow-md">
                 <span className="w-2 h-2 rounded-full bg-spot2 animate-bounce" style={{ animationDelay: '0ms' }}></span>
@@ -192,7 +193,8 @@ export default function ChatPage() {
 
       {/* Telegram Fallback helper */}
       <div className="flex-shrink-0 border border-white/[0.04] bg-stage/10 rounded-xl p-3 text-center text-xs text-haze mb-4 flex items-center justify-center gap-2">
-        <span>💬 Prefer Telegram? You can also message our agent on external chatrooms:</span>
+        <MessageSquare className="w-4 h-4 text-spot flex-shrink-0 inline" />
+        <span>Prefer Telegram? You can also message our agent on external chatrooms:</span>
         <a
           href="https://t.me/Apra_shaktibot"
           target="_blank"

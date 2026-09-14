@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { adminApi } from '../lib/adminApi'
 import { api } from '../lib/api'
+import { Bot, BarChart3, Calendar, Ticket, Receipt, Tag, Inbox, Armchair, Mic, Building2, MapPin, Paperclip, Settings } from 'lucide-react'
 import AnalyticsDashboard from '../components/AnalyticsDashboard'
 
 const emptyEvent = {
@@ -389,30 +390,33 @@ export default function AdminPage() {
         {/* Navigation Sidebar (Left Column) */}
         <div className="md:col-span-3 flex flex-row md:flex-col gap-2 overflow-x-auto md:overflow-visible pb-3 md:pb-0 border-b md:border-b-0 md:border-r border-white/[0.04] pr-0 md:pr-6">
           {[
-            { id: 'assistant', label: '🤖 AI Agent', icon: '⚡' },
-            { id: 'analytics', label: '📊 Analytics', icon: '📈' },
-            { id: 'events', label: '📅 Event Setup', icon: '📝' },
-            { id: 'pricing', label: '🎟️ Ticket Rates', icon: '🏷️' },
-            { id: 'bookings', label: '📋 Bookings List', icon: '🧾' },
-            { id: 'coupons', label: '🏷️ Promo Codes', icon: '🎟️' },
-            { id: 'submissions', label: '📬 Show Submissions', icon: '✅' },
-            { id: 'seatmap', label: '💺 Seat Layout', icon: '🗺️' },
-            { id: 'artists', label: '🎤 Artists', icon: '👨‍🎤' },
-            { id: 'venues', label: '🏟️ Venues', icon: '🏟️' },
-          ].map((item) => (
-            <button
-              key={item.id}
-              onClick={() => setTab(item.id)}
-              className={`flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-mono uppercase tracking-wider border transition-all duration-300 flex-shrink-0 w-auto md:w-full text-left ${
-                tab === item.id 
-                  ? 'bg-spot text-void border-spot font-bold shadow-md shadow-spot/10' 
-                  : 'border-white/[0.04] bg-white/[0.01] text-haze hover:border-white/[0.1] hover:text-paper'
-              }`}
-            >
-              <span>{item.icon}</span>
-              <span>{item.label}</span>
-            </button>
-          ))}
+            { id: 'assistant', label: 'AI Agent', icon: Bot },
+            { id: 'analytics', label: 'Analytics', icon: BarChart3 },
+            { id: 'events', label: 'Event Setup', icon: Calendar },
+            { id: 'pricing', label: 'Ticket Rates', icon: Ticket },
+            { id: 'bookings', label: 'Bookings List', icon: Receipt },
+            { id: 'coupons', label: 'Promo Codes', icon: Tag },
+            { id: 'submissions', label: 'Show Submissions', icon: Inbox },
+            { id: 'seatmap', label: 'Seat Layout', icon: Armchair },
+            { id: 'artists', label: 'Artists', icon: Mic },
+            { id: 'venues', label: 'Venues', icon: Building2 },
+          ].map((item) => {
+            const Icon = item.icon
+            return (
+              <button
+                key={item.id}
+                onClick={() => setTab(item.id)}
+                className={`flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-mono uppercase tracking-wider border transition-all duration-300 flex-shrink-0 w-auto md:w-full text-left ${
+                  tab === item.id 
+                    ? 'bg-spot text-void border-spot font-bold shadow-md shadow-spot/10' 
+                    : 'border-white/[0.04] bg-white/[0.01] text-haze hover:border-white/[0.1] hover:text-paper'
+                }`}
+              >
+                <Icon className="w-4 h-4 flex-shrink-0" />
+                <span>{item.label}</span>
+              </button>
+            )
+          })}
         </div>
 
         {/* Dynamic Panels (Right Column) */}
@@ -451,7 +455,7 @@ export default function AdminPage() {
                       </div>
                       {isUser && (
                         <span className="w-7 h-7 rounded-full border border-spot/20 bg-spot/5 text-spot font-mono text-xs flex items-center justify-center flex-shrink-0">
-                          ⚙️
+                          <Settings className="w-3.5 h-3.5" />
                         </span>
                       )}
                     </div>
@@ -460,7 +464,7 @@ export default function AdminPage() {
                 {chatSending && (
                   <div className="flex gap-3 items-end justify-start animate-pulse">
                     <span className="w-7 h-7 rounded-full border border-spot2/20 bg-spot2/5 text-spot2 font-mono text-xs flex items-center justify-center flex-shrink-0">
-                      🤖
+                      <Bot className="w-3.5 h-3.5" />
                     </span>
                     <div className="bg-stage border border-white/[0.04] rounded-2xl rounded-bl-sm px-4 py-3 text-sm text-haze">
                       Working on it…
@@ -473,13 +477,13 @@ export default function AdminPage() {
               <div className="flex flex-wrap gap-2 mb-3">
                 {chatImage && (
                   <span className="flex items-center gap-1.5 text-[10px] font-mono text-spot bg-spot/5 border border-spot/15 px-2.5 py-1 rounded-md">
-                    📎 {chatImage.name}
+                    <Paperclip className="w-3 h-3 text-spot" /> {chatImage.name}
                     <button type="button" onClick={() => setChatImage(null)} className="text-[9px] hover:text-white font-bold">✕</button>
                   </span>
                 )}
                 {venueLocation && (
                   <span className="flex items-center gap-1.5 text-[10px] font-mono text-spot2 bg-spot2/5 border border-spot2/15 px-2.5 py-1 rounded-md">
-                    📍 {venueLocation.name || venueLocation.address.split(',')[0]}
+                    <MapPin className="w-3 h-3 text-spot2" /> {venueLocation.name || venueLocation.address.split(',')[0]}
                     <button type="button" onClick={() => setVenueLocation(null)} className="text-[9px] hover:text-white font-bold">✕</button>
                   </span>
                 )}
@@ -524,7 +528,7 @@ export default function AdminPage() {
                 
                 {/* File Upload button wrapper */}
                 <label className="btn-ghost !px-3 cursor-pointer flex items-center justify-center text-sm shadow-md" title="Attach flyers/poster image">
-                  📎
+                  <Paperclip className="w-4 h-4 text-haze hover:text-paper" />
                   <input
                     type="file"
                     accept="image/*"
@@ -542,7 +546,7 @@ export default function AdminPage() {
                   disabled={chatSending}
                   title="Search & attach geocoding coordinates"
                 >
-                  📍
+                  <MapPin className="w-4 h-4 text-haze hover:text-paper" />
                 </button>
 
                 <button type="submit" disabled={chatSending || !chatInput.trim()} className="btn-spot !px-6 text-sm font-bold disabled:opacity-40">
@@ -557,7 +561,7 @@ export default function AdminPage() {
             <div className="space-y-6">
               <form onSubmit={handleCreateEvent} className="glass-card bg-stage/15 border border-white/[0.04] rounded-2xl p-6 space-y-4 shadow-2xl">
                 <div className="flex items-center gap-2 mb-2">
-                  <span className="text-xl">📅</span>
+                  <Calendar className="w-5 h-5 text-spot" />
                   <h2 className="font-display text-xl tracking-wide uppercase text-paper">Deploy Event Listing</h2>
                 </div>
 
@@ -611,8 +615,8 @@ export default function AdminPage() {
                       >
                         <div>
                           <p className="font-body font-bold text-paper text-sm">{e.artist_name}</p>
-                          <p className="text-[11px] text-haze font-mono mt-0.5">
-                            📍 {e.venue_name}, {e.city} · 📅 {e.event_date} · 🕒 {e.event_time}
+                          <p className="text-[11px] text-haze font-mono mt-0.5 flex items-center gap-1.5">
+                            <MapPin className="w-3 h-3 text-spot flex-shrink-0" /> {e.venue_name}, {e.city} · <Calendar className="w-3 h-3 text-spot2 flex-shrink-0 inline" /> {e.event_date} · {e.event_time}
                           </p>
                         </div>
                         <span className="text-xs font-mono text-spot border border-spot/20 bg-spot/5 px-2 py-0.5 rounded uppercase">
@@ -630,7 +634,7 @@ export default function AdminPage() {
           {tab === 'pricing' && (
             <form onSubmit={handleAddTicket} className="glass-card bg-stage/15 border border-white/[0.04] rounded-2xl p-6 space-y-4 shadow-2xl">
               <div className="flex items-center gap-2 mb-2">
-                <span className="text-xl">🎟️</span>
+                <Ticket className="w-5 h-5 text-spot" />
                 <h2 className="font-display text-xl tracking-wide uppercase text-paper">Add Ticket Category</h2>
               </div>
               
@@ -662,12 +666,12 @@ export default function AdminPage() {
                             User ID: {b.user_id.split('-')[0]}...
                           </span>
                         </div>
-                        <p className="text-xs text-haze mt-1.5">
-                          🎟️ <span className="font-bold text-paper">{eventObj.artist_name || `Ref ID: ${b.event_id}`}</span> · <span className="uppercase">{b.category}</span> · <span className="font-bold text-spot2">{b.seats_booked} seats</span>
+                        <p className="text-xs text-haze mt-1.5 flex items-center gap-1">
+                          <Ticket className="w-3.5 h-3.5 text-spot inline" /> <span className="font-bold text-paper">{eventObj.artist_name || `Ref ID: ${b.event_id}`}</span> · <span className="uppercase">{b.category}</span> · <span className="font-bold text-spot2">{b.seats_booked} seats</span>
                         </p>
                         {eventObj.event_date && (
-                          <p className="text-[10px] font-mono text-haze/50 mt-1">
-                            📍 {eventObj.venue_name}, {eventObj.city} · 📅 {eventObj.event_date}
+                          <p className="text-[10px] font-mono text-haze/50 mt-1 flex items-center gap-1">
+                            <MapPin className="w-3 h-3 text-spot inline" /> {eventObj.venue_name}, {eventObj.city} · <Calendar className="w-3 h-3 text-spot2 inline" /> {eventObj.event_date}
                           </p>
                         )}
                       </div>
