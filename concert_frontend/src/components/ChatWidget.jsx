@@ -251,7 +251,7 @@ export default function ChatWidget() {
                     🤖
                   </span>
                   <div className="bg-stage2 border border-white/[0.04] rounded-xl rounded-bl-sm px-3 py-2 text-xs text-haze">
-                    Typing…
+                    Thinking…
                   </div>
                 </div>
               )}

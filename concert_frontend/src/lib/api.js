@@ -269,6 +269,7 @@ export const api = {
   adminUpdateArtist: (artistId, data) => request(`/admin/artists/${artistId}`, { method: 'PATCH', auth: true, body: data }),
   adminUploadArtistImage: async (artistId, imageFile) => {
     const token = getToken()
+    if (!token) throw new Error('Not logged in')
     const formData = new FormData()
     formData.append('image', imageFile)
     const res = await fetch(`${BASE_URL}/admin/artists/${artistId}/upload-image`, {
@@ -276,8 +277,14 @@ export const api = {
       headers: { Authorization: `Bearer ${token}` },
       body: formData,
     })
-    if (!res.ok) throw new Error('Image upload failed')
-    return res.json()
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      const message = data.detail
+        ? (typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail))
+        : `Image upload failed (${res.status})`
+      throw new Error(message)
+    }
+    return data
   },
 
   // Venues
@@ -286,6 +293,7 @@ export const api = {
   adminUpdateVenue: (venueId, data) => request(`/admin/venues/${venueId}`, { method: 'PATCH', auth: true, body: data }),
   adminUploadVenueImage: async (venueId, imageFile) => {
     const token = getToken()
+    if (!token) throw new Error('Not logged in')
     const formData = new FormData()
     formData.append('image', imageFile)
     const res = await fetch(`${BASE_URL}/admin/venues/${venueId}/upload-image`, {
@@ -293,8 +301,14 @@ export const api = {
       headers: { Authorization: `Bearer ${token}` },
       body: formData,
     })
-    if (!res.ok) throw new Error('Image upload failed')
-    return res.json()
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      const message = data.detail
+        ? (typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail))
+        : `Image upload failed (${res.status})`
+      throw new Error(message)
+    }
+    return data
   },
 
   // Reviews

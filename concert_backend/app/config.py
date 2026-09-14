@@ -26,6 +26,16 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # "Telegram Trigger" + "Send a text message" nodes)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
+# Optional extra allowed CORS origins (comma-separated), e.g. a one-off
+# Vercel preview deployment URL you're testing against. Set this in your
+# hosting provider's env vars instead of hardcoding new URLs into main.py -
+# preview URLs churn constantly and hardcoded ones just accumulate as dead
+# config over time. Empty by default; the stable production/dev origins in
+# main.py's CORSMiddleware are unaffected either way.
+EXTRA_CORS_ORIGINS = [
+    origin.strip() for origin in os.getenv("EXTRA_CORS_ORIGINS", "").split(",") if origin.strip()
+]
+
 if not SUPABASE_URL or not SUPABASE_ANON_KEY:
     raise RuntimeError(
         "SUPABASE_URL and SUPABASE_ANON_KEY must be set in your .env file"

@@ -7,6 +7,7 @@ from slowapi.errors import RateLimitExceeded
 from app.routes import artist_routes
 from app.limiter import limiter
 from app.routes import auth_routes, chat_routes, concert_routes, booking_routes, admin_routes, wishlist_routes, voice_routes, telegram_routes, show_routes, coupon_routes, venue_routes, review_routes, analytics_routes, waitlist_routes, ai_routes
+from app.config import EXTRA_CORS_ORIGINS
 app = FastAPI(title="Concert Booking Assistant API")
 
 app.state.limiter = limiter
@@ -44,12 +45,18 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(status_code=422, content={"detail": detail})
 
 # Allow the frontend (running on a different port/domain) to call this API.
-# Tighten allow_origins to your actual frontend URL before going live.
+# Stable production + local-dev origins only - do not hardcode one-off
+# preview-deployment URLs here (they churn constantly and just accumulate
+# as dead config). Add a temporary preview URL via the EXTRA_CORS_ORIGINS
+# env var instead (comma-separated), see app/config.py.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://events-two-phi.vercel.app","http://localhost:5173",
-        "http://127.0.0.1:5173","https://events-o0v9jffi9-yuvraj-e83c.vercel.app","https://concert-new-one.vercel.app",
-],  
+    allow_origins=[
+        "https://events-two-phi.vercel.app",
+        "https://concert-new-one.vercel.app",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ] + EXTRA_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

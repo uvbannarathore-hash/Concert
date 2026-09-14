@@ -73,6 +73,10 @@ _client = genai.Client(api_key=GEMINI_API_KEY)
 SYSTEM_PROMPT = """You are a friendly and helpful ticket booking assistant, similar to BookMyShow — covering concerts, movies, comedy shows, music shows, plays, and sports events.
 Your job is to answer user questions using the correct tool. You MUST use a tool whenever the user's question requires information from the database. Do not guess or invent information.
 
+DOMAIN SCOPE (HARD RULE):
+You are NOT a general-purpose knowledge assistant. You only help with LiveWire concerts, movies, comedy shows, music shows, plays, sports events, tickets, seats, pricing, demand/availability, bookings, cancellations/refunds, and the LiveWire platform itself.
+If the user asks something with no connection to that - general trivia/knowledge (e.g. "what is the national bird of India"), coding help, math, weather, jokes, news, or any other unrelated topic - do NOT answer it, even partially or briefly, and do NOT use any tool for it. Politely say that's outside what you can help with here, and redirect them to LiveWire concerts, events, tickets, or bookings. Do this even if you're confident you know the answer. This rule overrides every other instruction below when there's a conflict.
+
 PERSONALIZATION:
 If the user's message contains a segment like "[User name: Ravi Kumar]", you know their first name — address them naturally and warmly by their first name in your reply (e.g. "Hey Ravi, ..."). Do this in every reply where the tag is present, but keep it natural and varied, not robotic or repetitive-sounding. Never mention the tag itself. If no such tag is present, do not invent or guess a name.
 
@@ -312,8 +316,16 @@ If there is no recent context provided, context_needed MUST be false.
         return IntentClassification(**data)
     except Exception as e:
         logger.error(f"Intent classification failed: {e}")
-        # Default fallback if classifier fails
-        return IntentClassification(intent="EVENT_SEARCH", context_needed=True)
+        # Fail safe, not fail closed: we deliberately do NOT default to
+        # EVENT_SEARCH here. Mislabeling a classifier failure as a
+        # confident "EVENT_SEARCH" is exactly how an unknown/general
+        # question used to silently sail through as if it had been
+        # correctly classified. "UNKNOWN" is a distinct, non-committal
+        # value: _run() treats it as "let the general agent (and the
+        # DOMAIN SCOPE hard rule in SYSTEM_PROMPT) handle it" rather than
+        # either blocking a possibly-legitimate booking query or quietly
+        # relabeling it as something it was never actually classified as.
+        return IntentClassification(intent="UNKNOWN", context_needed=True)
 
 
 async def _run(effective_user_id: str, session_id: str, name: str, is_admin: bool, message: str, chat_id: str | None) -> str:
@@ -353,6 +365,29 @@ async def _run(effective_user_id: str, session_id: str, name: str, is_admin: boo
     # responsible for correct resolution instead.
     if re.search(r"\b(first|second|third|fourth|fifth)\b", message, re.IGNORECASE):
         logger.info("Ordinal reference detected – keeping full history so the correct numbered search result can be re-resolved")
+
+    # OUT_OF_DOMAIN gate — this is the actual enforcement point. Previously
+    # classify_intent() correctly labeled unrelated general-knowledge
+    # questions as OUT_OF_DOMAIN, but nothing ever read classification.intent
+    # to act on it (it was only used for context_needed and the two regex
+    # overrides above), so every message - regardless of classified intent -
+    # fell through to gemini_loop.run_agent() and got a general-purpose
+    # Gemini answer. This short-circuits before that call, with a static
+    # deterministic reply (no extra Gemini call, ₹0 incremental AI cost).
+    # The demand/seat-advice regex overrides above run first and can
+    # already flip classification away from OUT_OF_DOMAIN for obviously
+    # in-domain phrasing, so this only fires for what the classifier still
+    # considers out-of-domain after those checks.
+    if classification.intent == "OUT_OF_DOMAIN":
+        logger.info("OUT_OF_DOMAIN intent detected – short-circuiting before gemini_loop.run_agent()")
+        greeting = f"Hey {name}, " if name else ""
+        reply = (
+            f"{greeting}that's outside what I can help with here — I'm LiveWire's booking assistant. "
+            "I can help you find concerts, movies, or other events, check ticket prices and availability, "
+            "or manage your bookings. Is there something like that I can help with?"
+        )
+        memory.save_turn("customer", effective_user_id, session_id, message, reply)
+        return reply
 
     if not classification.context_needed:
         if history:

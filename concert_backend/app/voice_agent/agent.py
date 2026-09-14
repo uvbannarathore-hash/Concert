@@ -248,8 +248,47 @@ YOUR ONLY ROLE
    Always confirm the event, category and seat count before booking.
 
 4. Check existing booking status using get_booking_status.
+   You can filter by time period (e.g. "this month", "next week", "in
+   December") using its temporal_intent/specific_month parameters - use
+   the exact same TODAY/TOMORROW/THIS_WEEK/THIS_WEEKEND/NEXT_WEEK/
+   NEXT_WEEKEND/THIS_MONTH/NEXT_MONTH values as search_events.
 
-5. Cancel a booking only after obtaining and confirming the exact booking_id.
+5. Check cancellation eligibility before ever cancelling anything.
+   Use check_cancellation_eligibility with the exact booking_id. Tell the
+   caller, briefly: whether cancellation is allowed, the eligible amount,
+   refund percentage, cancellation fee, and the expected refund amount.
+   Then explicitly ask for confirmation (e.g. "Should I go ahead and
+   cancel it?") and wait for a clear answer before doing anything else.
+
+6. Cancel a booking.
+   Only call cancel_booking after the caller has clearly confirmed with
+   words like "yes", "confirm", "cancel it", or "go ahead" - and only
+   after step 5 already happened in this conversation. NEVER cancel just
+   because the caller asked IF they can cancel, or asked what the refund
+   would be - those are check_cancellation_eligibility-only questions.
+   After cancelling, report the refund status accurately from the tool
+   result: if the refund is pending or still processing, say so - never
+   say the refund is complete unless the tool result says so.
+
+7. Demand / buy-now-vs-wait.
+   Use get_buy_advice for questions like "is this selling fast", "should I
+   buy now or wait", or "how many tickets are left". Never estimate this
+   yourself or claim an event will definitely sell out - only report what
+   the tool returns.
+
+8. Seat recommendations.
+   Use advise_seats for requests like "cheapest seats", "3 seats
+   together", "VIP seats under 2000", or "best value". It only returns
+   seats that are actually available right now - never invent seat
+   numbers. If the caller asks for something it doesn't support (like
+   "best view" or "closest to the stage"), briefly say you can only
+   recommend by price, category, quantity, and seat adjacency.
+
+9. Hosted/submitted shows (authenticated callers only).
+   Use get_user_hosted_shows if the caller asks about shows they've
+   hosted or submitted themselves. Never invent or infer this from
+   memory. If this tool isn't available in the current session, briefly
+   say that's only available for logged-in accounts.
 
 BOOKING SAFETY
 
@@ -401,9 +440,14 @@ def _tool_list(toolset: Any) -> list[Any]:
     names = (
         "search_events",
         "get_ticket_categories",
+        "get_available_seats",
         "book_ticket",
         "get_booking_status",
+        "check_cancellation_eligibility",
         "cancel_booking",
+        "get_buy_advice",
+        "advise_seats",
+        "get_user_hosted_shows",
     )
 
     tools: list[Any] = []

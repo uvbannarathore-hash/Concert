@@ -42,13 +42,6 @@ websockets==15.0.1
 razorpay==1.4.2
 google-auth==2.57.0
 tenacity==9.1.4
-# SpeechRecognition/gTTS/pydub below are leftovers from the old orphaned
-# app/voice_agent.py flat file (dead code, not used by voice_routes.py or
-# the current app/voice_agent/ package) - harmless to keep, safe to remove
-# once that legacy file is deleted.
-SpeechRecognition==3.10.4
-gTTS==2.5.1
-pydub==0.25.1
 
 # google-genai is installed SEPARATELY via:
 #   pip install --no-deps google-genai==1.23.0

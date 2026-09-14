@@ -214,8 +214,8 @@ async def transcribe_audio_via_cartesia(pcm_bytes: bytes) -> str:
                             final_text.append(event.alternatives[0].text)
                         if getattr(event, 'type', None) in [SpeechEventType.FINAL_TRANSCRIPT, SpeechEventType.END_OF_SPEECH]:
                             done_event.set()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"STT stream read_stream() error: {e}")
                 finally:
                     done_event.set()
 
@@ -417,8 +417,8 @@ def _extract_spoken_text_from_failed_generation(err_json_str: str) -> str:
             m = re.search(r'["\']?arguments["\']?\s*:\s*"?([^}"]+)', failed_gen)
             if m:
                 return m.group(1).strip(' "{\n\r\t')
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"_extract_spoken_text_from_failed_generation() could not parse error payload: {e}")
     return ""
 
 
@@ -877,8 +877,8 @@ DYNAMIC VOICE & CONVERSATION RULES
                         await asyncio.sleep(1.0)
                         try:
                             await self.websocket.close()
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"WebSocket close during hangup raised (likely already closed): {e}")
                     elif is_farewell_resp and booking_in_progress:
                         logger.warning("Farewell keyword in response but booking still in progress — suppressing hangup.")
 
@@ -897,8 +897,8 @@ DYNAMIC VOICE & CONVERSATION RULES
         try:
             self.vad_stream.end_input()
             await self.vad_stream.aclose()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Error closing VAD stream during call teardown: {e}")
 
         # Save complete call transcript to database as structured JSON
         try:
