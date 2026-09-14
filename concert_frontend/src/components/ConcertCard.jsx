@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import { useState } from 'react'
 import { api } from '../lib/api'
+import { MapPin, Calendar, Navigation } from 'lucide-react'
 
 const statusStyles = {
   Upcoming: 'text-go border-go/20 bg-go/5',
@@ -158,8 +159,9 @@ export default function ConcertCard({ event, wishlisted = false, onWishlistChang
               )}
             </h3>
 
-            <p className="text-xs font-semibold text-haze mt-1.5 flex items-center gap-2 flex-wrap relative z-20">
-              <span className="flex items-center gap-1">📍 
+            <p className="text-xs font-semibold text-haze mt-1.5 flex items-center gap-1.5 flex-wrap relative z-20">
+              <span className="flex items-center gap-1">
+                <MapPin className="w-3.5 h-3.5 text-spot flex-shrink-0" />
                 {event.venue_id ? (
                   <Link 
                     to={`/venues/${event.venue_id}`}
@@ -181,16 +183,20 @@ export default function ConcertCard({ event, wishlisted = false, onWishlistChang
           </div>
 
           <div className="text-[11px] font-mono text-haze/70 border-t border-white/[0.03] pt-3.5 mt-4 flex items-center justify-between relative z-20">
-            <span>📅 {formatDate(event.event_date)}</span>
+            <span className="flex items-center gap-1.5">
+              <Calendar className="w-3.5 h-3.5 text-haze/70" />
+              {formatDate(event.event_date)}
+            </span>
             {event.latitude != null && event.longitude != null && (
               <a
                 href={`https://www.google.com/maps/dir/?api=1&destination=${event.latitude},${event.longitude}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={(e) => e.stopPropagation()}
-                className="text-[11px] text-spot2 hover:text-spot underline underline-offset-4 hover:scale-105 transition-transform inline-flex items-center gap-0.5"
+                className="text-[11px] text-spot2 hover:text-spot underline underline-offset-4 hover:scale-105 transition-transform inline-flex items-center gap-1 font-semibold"
               >
-                Directions ↗
+                <span>Directions</span>
+                <Navigation className="w-3 h-3 text-spot2" />
               </a>
             )}
           </div>

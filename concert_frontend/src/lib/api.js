@@ -1,7 +1,23 @@
 // In dev, falls back to localhost. In production, set VITE_API_URL in your
 // hosting provider's environment variables to your deployed backend URL.
-const envUrl = import.meta.env.VITE_API_URL
-const BASE_URL = (envUrl && envUrl.trim()) ? envUrl.trim().replace(/\/+$/, '') : 'http://127.0.0.1:8000'
+const getBaseUrl = () => {
+  const envUrl = import.meta.env.VITE_API_URL
+  if (typeof window !== 'undefined') {
+    const hostname = window.location.hostname
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+      return 'http://127.0.0.1:8000'
+    }
+    // If envUrl is explicitly set to a public URL (e.g. trycloudflare or vercel), use it
+    if (envUrl && !envUrl.includes('127.0.0.1') && !envUrl.includes('localhost')) {
+      return envUrl.trim().replace(/\/+$/, '')
+    }
+    // Otherwise, route mobile requests to LAN IP so mobile devices on Wi-Fi reach the backend
+    const devIp = import.meta.env.VITE_DEV_HOST_IP || '192.168.11.215'
+    return `http://${devIp}:8000`
+  }
+  return (envUrl && envUrl.trim()) ? envUrl.trim().replace(/\/+$/, '') : 'http://127.0.0.1:8000'
+}
+const BASE_URL = getBaseUrl()
 
 function getToken() {
   return localStorage.getItem('access_token')
@@ -82,7 +98,11 @@ async function tryRefreshToken() {
 }
 
 async function request(path, { method = 'GET', body, auth = false, _retried = false } = {}) {
-  const headers = { 'Content-Type': 'application/json' }
+  const headers = { 
+    'Content-Type': 'application/json',
+    'Bypass-Tunnel-Reminder': 'true',
+    'ngrok-skip-browser-warning': 'true'
+  }
   if (auth) {
     const token = getToken()
     if (!token) throw new Error('Not logged in')
@@ -331,5 +351,17 @@ export const api = {
 }
 
 export function getPublicPassUrl(bookingId) {
-  return `${window.location.origin}/ticket/${bookingId}`
-}
+  // If a public URL (e.g. Vercel deployment or tunnel URL) is set, use it for mobile data compatibility
+  const publicUrl = import.meta.env.VITE_PUBLIC_URL
+  if (publicUrl && publicUrl.trim()) {
+    return `${publicUrl.trim().replace(/\/+$/, '')}/ticket/${bookingId}`
+  }
+
+  const origin = window.location.origin
+  if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
+    const localIp = import.meta.env.VITE_DEV_HOST_IP || '192.168.11.215'
+    const port = window.location.port || '5173'
+    return `http://${localIp}:${port}/ticket/${bookingId}`
+  }
+  return `${origin}/ticket/${bookingId}`
+}

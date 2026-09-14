@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import ConcertCard from '../components/ConcertCard'
+import { MessageSquare, ChevronLeft, ChevronRight, Search, Ticket, Flame, Headphones, Mic as MicIcon } from 'lucide-react'
 
 const SLIDES = [
   {
@@ -10,7 +11,7 @@ const SLIDES = [
     cta: "Browse Concerts",
     category: "Concert",
     themeClass: "from-spot/30 via-void/50 to-void/90",
-    badge: "🔥 SELLING FAST",
+    badge: "SELLING FAST",
     badgeColor: "text-spot border-spot/20 bg-spot/5"
   },
   {
@@ -19,7 +20,7 @@ const SLIDES = [
     cta: "Explore Music Shows",
     category: "Music Show",
     themeClass: "from-go/25 via-void/50 to-void/90",
-    badge: "🎧 INDIE & TECHNO",
+    badge: "INDIE & TECHNO",
     badgeColor: "text-go border-go/20 bg-go/5"
   },
   {
@@ -28,7 +29,7 @@ const SLIDES = [
     cta: "Book Comedy Shows",
     category: "Comedy Show",
     themeClass: "from-spot2/25 via-void/50 to-void/90",
-    badge: "🎤 LIVE COMEDY",
+    badge: "LIVE COMEDY",
     badgeColor: "text-spot2 border-spot2/20 bg-spot2/5"
   }
 ]
@@ -215,8 +216,11 @@ export default function HomePage() {
             <span className="text-[10px] font-mono tracking-widest text-haze/60 uppercase">
               {profile?.name ? `${timeGreeting()}, ${profile.name.split(' ')[0]}` : 'LIVE TICKET HUB'}
             </span>
-            <span className={`text-[9px] font-mono px-2 py-0.5 rounded border uppercase tracking-wider ${SLIDES[currentSlide].badgeColor}`}>
-              {SLIDES[currentSlide].badge}
+            <span className={`text-[9px] font-mono px-2 py-0.5 rounded border uppercase tracking-wider flex items-center gap-1 ${SLIDES[currentSlide].badgeColor}`}>
+              {currentSlide === 0 && <Flame className="w-3 h-3 text-spot" />}
+              {currentSlide === 1 && <Headphones className="w-3 h-3 text-go" />}
+              {currentSlide === 2 && <MicIcon className="w-3 h-3 text-spot2" />}
+              <span>{SLIDES[currentSlide].badge}</span>
             </span>
           </div>
           
@@ -241,7 +245,8 @@ export default function HomePage() {
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-void border border-white/[0.08] hover:border-spot/40 text-paper font-semibold hover:-translate-y-0.5 active:translate-y-0 transition-all duration-300 text-xs"
             >
-              💬 Support on Telegram
+              <MessageSquare className="w-3.5 h-3.5 text-spot2" />
+              <span>Support on Telegram</span>
             </a>
           </div>
         </div>
@@ -252,14 +257,14 @@ export default function HomePage() {
           className="absolute left-4 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-void/50 border border-white/[0.04] text-paper flex items-center justify-center hover:bg-void/80 hover:scale-105 active:scale-95 transition"
           aria-label="Previous slide"
         >
-          ❮
+          <ChevronLeft className="w-5 h-5 text-paper" />
         </button>
         <button
           onClick={() => setCurrentSlide((prev) => (prev + 1) % SLIDES.length)}
           className="absolute right-4 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-void/50 border border-white/[0.04] text-paper flex items-center justify-center hover:bg-void/80 hover:scale-105 active:scale-95 transition"
           aria-label="Next slide"
         >
-          ❯
+          <ChevronRight className="w-5 h-5 text-paper" />
         </button>
 
         {/* Indicator dots */}
@@ -496,7 +501,7 @@ export default function HomePage() {
         {/* Semantic search no results */}
         {!aiSearchLoading && searchQuery && !aiSearchError && aiSearchResults.length === 0 && (
           <div className="text-center py-24 border border-dashed border-white/[0.06] rounded-2xl max-w-2xl mx-auto bg-stage2/5">
-            <span className="text-4xl">🔍</span>
+            <Search className="w-10 h-10 text-haze/40 mx-auto" />
             <p className="font-display text-2xl mb-2 text-paper mt-3 uppercase tracking-wide">No semantic matches</p>
             <p className="text-sm text-haze max-w-sm mx-auto">Try a different phrase, or clear the search to browse all shows.</p>
           </div>
@@ -521,14 +526,14 @@ export default function HomePage() {
         {/* Error message */}
         {error && !searchQuery && (
           <div className="border border-spot/20 bg-spot/5 text-spot rounded-2xl p-6 text-center text-sm font-mono max-w-md mx-auto">
-            ⚠️ Network error: {error}
+            Network error: {error}
           </div>
         )}
 
         {/* Empty state — keyword fallback OR no search */}
         {!loading && !error && !searchQuery && groupedEvents.length === 0 && (
           <div className="text-center py-24 border border-dashed border-white/[0.06] rounded-2xl max-w-2xl mx-auto bg-stage2/5">
-            <span className="text-4xl">🎫</span>
+            <Ticket className="w-10 h-10 text-haze/40 mx-auto" />
             <p className="font-display text-2xl mb-2 text-paper mt-3 uppercase tracking-wide">Nothing matches your search</p>
             <p className="text-sm text-haze max-w-sm mx-auto">Check back soon, clear your filters, or type another search term.</p>
             <button 
