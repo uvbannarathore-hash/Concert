@@ -180,10 +180,15 @@ Tickets: 2
 Price: Rs 200 per ticket (Total: Rs 400)
 Use plain sentences or simple line breaks for lists - never asterisks, underscores, backticks, or "#" headers.
 
-SEAT UPGRADE WORKFLOW:
-When the user asks to upgrade their existing tickets or wants to be notified if better seats (like VIP) become available:
-1. Requesting an Upgrade: Use get_user_booking_history to find their existing booking. Call request_seat_upgrade(booking_id, desired_category). Tell the user they have been added to the automated monitor and will be notified via Telegram/Email if seats become available.
-2. Approving an Upgrade: If a user says "I received an upgrade notification, please upgrade my seats" or "Approve the upgrade", use get_user_booking_history to find their booking, then call approve_seat_upgrade(booking_id). Do NOT calculate the price difference yourself. The tool will calculate the difference and return either a Razorpay payment link (if more expensive), a refund confirmation (if cheaper), or a success message (if equal). Relay the exact outcome and payment link (if any) to the user.
+SEAT UPGRADE & DOWNGRADE WORKFLOW:
+When the user asks to change their existing ticket category (upgrade or downgrade):
+1. Determine if it is an UPGRADE or DOWNGRADE: Check the prices of the desired category vs current category.
+   - If desired category price > current category price: This is an UPGRADE.
+   - If desired category price < current category price: This is a DOWNGRADE. (Note: Even if the user says "Upgrade my booking to Silver", if Silver is cheaper than Gold, you MUST interpret it as a DOWNGRADE based on price).
+   - If desired category price == current category price: Tell the user no price change or upgrade/downgrade is needed.
+2. UPGRADE (More Expensive): Use get_user_booking_history to find their existing booking. Call request_seat_upgrade(booking_id, desired_category). Tell the user they have been added to the automated monitor and will be notified via Telegram/Email if seats become available.
+3. DOWNGRADE (Cheaper): Use get_user_booking_history to find their existing booking. Call direct_seat_downgrade(booking_id, desired_category). NEVER use cancel_booking + re-book for a downgrade. The direct_seat_downgrade tool handles the category change and initiates the refund automatically.
+4. Approving an Upgrade Notification: If a user says "I received an upgrade notification, please upgrade my seats" or "Approve the upgrade", use get_user_booking_history to find their booking, then call approve_seat_upgrade(booking_id). Relay the exact outcome and payment link (if any) to the user.
 
 ADMIN RESTRICTIONS:
 If the user message has "[User is_admin: true]", the user is an Administrator.
@@ -284,6 +289,7 @@ def _build_bound_handlers(user_id: str, chat_id: str | None) -> dict:
         "save_itinerary": lambda event_id, plan_json: _BASE_HANDLERS["save_itinerary"](user_id, event_id, plan_json),
         "request_seat_upgrade": lambda booking_id, desired_category: _BASE_HANDLERS["request_seat_upgrade"](user_id, booking_id, desired_category),
         "approve_seat_upgrade": lambda booking_id: _BASE_HANDLERS["approve_seat_upgrade"](user_id, booking_id),
+        "direct_seat_downgrade": lambda booking_id, desired_category: _BASE_HANDLERS["direct_seat_downgrade"](user_id, booking_id, desired_category),
     }
 
 

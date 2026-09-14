@@ -280,6 +280,54 @@ def request_seat_upgrade(user_id: str, booking_id: str, desired_category: str) -
             return {"success": False, "message": f"You already have an active monitoring request for {desired_category}."}
         return {"success": False, "message": f"Could not request upgrade: {e}"}
 
+def direct_seat_downgrade(user_id: str, booking_id: str, desired_category: str) -> dict:
+    # 1. Fetch booking
+    booking_res = supabase_admin.table("bookings").select("*").eq("booking_id", booking_id).eq("user_id", user_id).execute()
+    if not booking_res.data:
+        return {"success": False, "message": "Booking not found or does not belong to you."}
+    booking = booking_res.data[0]
+    
+    if booking["status"] != "Confirmed":
+        return {"success": False, "message": f"Cannot modify booking with status: {booking['status']}. Only Confirmed bookings can be modified."}
+        
+    current_category = booking["category"]
+    if current_category == desired_category:
+        return {"success": False, "message": "You are already booked in this category."}
+        
+    # Check if category exists
+    cat_res = supabase_admin.table("ticket_categories").select("*").eq("event_id", booking["event_id"]).in_("category", [current_category, desired_category]).execute()
+    cats = {c["category"]: c for c in cat_res.data}
+    
+    if desired_category not in cats or current_category not in cats:
+        return {"success": False, "message": "Categories not found for this event."}
+        
+    desired_cat_data = cats[desired_category]
+    current_cat_data = cats[current_category]
+    
+    # Verify it is economically a downgrade
+    if float(desired_cat_data["price_inr"]) >= float(current_cat_data["price_inr"]):
+        return {"success": False, "message": f"The requested category {desired_category} is not cheaper than your current category {current_category}. This tool is for downgrades only."}
+
+    # Cancel any existing active requests for this booking to prevent unique constraint errors
+    supabase_admin.table("seat_upgrade_requests").update({"status": "cancelled"}).eq("original_booking_id", booking_id).in_("status", ["active"]).execute()
+
+    # Insert downgrade request directly as 'notified' to bypass cron/email triggers
+    try:
+        supabase_admin.table("seat_upgrade_requests").insert({
+            "user_id": user_id,
+            "original_booking_id": booking_id,
+            "event_id": booking["event_id"],
+            "current_category": current_category,
+            "desired_category": desired_category,
+            "status": "notified"
+        }).execute()
+        
+        # Reuse existing approve_seat_upgrade flow for downgrade DB/refund sync
+        return approve_seat_upgrade(user_id, booking_id)
+        
+    except Exception as e:
+        return {"success": False, "message": f"Could not process downgrade: {e}"}
+
 def approve_seat_upgrade(user_id: str, booking_id: str) -> dict:
     from app.services.cancellation_service import _fetch_payment_and_refunds, _reconcile_refund_state
     from app.config import RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET
@@ -389,6 +437,19 @@ def approve_seat_upgrade(user_id: str, booking_id: str) -> dict:
             
             # Check if there's enough refundable amount
             if recon["remaining_refundable_amount"] < refund_amount_paise:
+                # If we already have a matching refund (from a previous retry of this same downgrade), use it!
+                matching = recon.get("matching_refund")
+                if matching and (matching.get("amount") or 0) >= refund_amount_paise:
+                    refund_id = matching.get("id")
+                    if not refund_id:
+                        raise Exception("Found matching refund but it had no ID.")
+                    
+                    supabase_admin.table("seat_upgrade_requests").update({
+                        "status": "upgraded",
+                        "refund_id": refund_id
+                    }).eq("id", req_id).execute()
+                    return {"success": True, "message": f"Successfully downgraded to {desired_category}. A refund of INR {refund_amount} has been initiated."}
+                
                 return {"success": False, "message": "Booking was downgraded successfully, but cannot refund difference: Payment is already partially or fully refunded."}
                 
             refund = razorpay_client.payment.refund(razorpay_payment_id, {
@@ -396,9 +457,15 @@ def approve_seat_upgrade(user_id: str, booking_id: str) -> dict:
                 "notes": {"booking_id": booking_id, "reason": "seat_upgrade_downgrade", "upgrade_request_id": req_id}
             })
             
+            refund_id = refund.get("id") if isinstance(refund, dict) else None
+            if not refund_id:
+                # Treat missing refund ID as a failure so we don't falsely claim success without an audit trail
+                raise Exception("Razorpay refund API succeeded but did not return a valid refund ID.")
+            
             # 3. Update request
             supabase_admin.table("seat_upgrade_requests").update({
-                "status": "upgraded"
+                "status": "upgraded",
+                "refund_id": refund_id
             }).eq("id", req_id).execute()
             
             return {"success": True, "message": f"Successfully downgraded to {desired_category}. A refund of INR {refund_amount} has been initiated."}
@@ -839,6 +906,18 @@ FUNCTION_DECLARATIONS = [
             },
             "required": ["booking_id"]
         }
+    },
+    {
+        "name": "direct_seat_downgrade",
+        "description": "Use this tool to immediately downgrade a user's booking to a cheaper ticket category. DO NOT use cancel_booking for downgrades. This tool directly invokes the downgrade workflow, reassigns seats, and processes the Razorpay refund for the price difference.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "booking_id": {"type": "string", "description": "The existing booking ID to downgrade."},
+                "desired_category": {"type": "string", "description": "The target ticket category (must be cheaper than the current one)."}
+            },
+            "required": ["booking_id", "desired_category"]
+        }
     }
 ]
 
@@ -865,4 +944,5 @@ TOOL_HANDLERS = {
     "save_itinerary": save_itinerary,
     "request_seat_upgrade": request_seat_upgrade,
     "approve_seat_upgrade": approve_seat_upgrade,
+    "direct_seat_downgrade": direct_seat_downgrade,
 }
