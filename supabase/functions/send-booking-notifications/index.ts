@@ -30,15 +30,18 @@ serve(async (req) => {
     // 2. Only act when status just transitioned INTO "Confirmed", "Cancelled",
     //    or when reminder_sent transitioned to true.
     const justConfirmed =
-      record?.status === "Confirmed" && oldRecord?.status !== "Confirmed";
+      record?.status === "Confirmed" && oldRecord?.status !== "Confirmed" && payload.table === "bookings";
 
     const justCancelled =
-      record?.status === "Cancelled" && oldRecord?.status !== "Cancelled";
+      record?.status === "Cancelled" && oldRecord?.status !== "Cancelled" && payload.table === "bookings";
 
     const justReminded =
-      record?.reminder_sent === true && oldRecord?.reminder_sent !== true;
+      record?.reminder_sent === true && oldRecord?.reminder_sent !== true && payload.table === "bookings";
+      
+    const justNotifiedSeatUpgrade =
+      record?.status === "notified" && oldRecord?.status !== "notified" && payload.table === "seat_upgrade_requests";
 
-    if (!justConfirmed && !justCancelled && !justReminded) {
+    if (!justConfirmed && !justCancelled && !justReminded && !justNotifiedSeatUpgrade) {
       return new Response(JSON.stringify({ skipped: true }), { status: 200 });
     }
 
@@ -148,6 +151,21 @@ serve(async (req) => {
           <li><strong>Seats:</strong> ${record.seats_booked}</li>
         </ul>
         <p>Get ready for an amazing experience! See you there.</p>
+      `;
+    } else if (justNotifiedSeatUpgrade) {
+      subject = "Good news! Seats available for upgrade";
+      telegramMessage = `Good news! ${record.desired_category} seats are now available for your booking.\n\n${eventLine}You currently have ${record.current_category} tickets (Booking: ${record.original_booking_id}).\n\nReply 'Upgrade my booking' to claim the upgrade. Availability is subject to change.`;
+      emailHtml = `
+        <h2>Seat Upgrade Available</h2>
+        <p>Hi ${user?.name || "there"},</p>
+        <p>Good news! <strong>${record.desired_category}</strong> seats are now available for your booking.</p>
+        <ul>
+          ${event ? `<li><strong>Event:</strong> ${event.artist_name}${event.venue_name ? ` @ ${event.venue_name}` : ""}</li>` : ""}
+          <li><strong>Booking ID:</strong> ${record.original_booking_id}</li>
+          <li><strong>Current Category:</strong> ${record.current_category}</li>
+          <li><strong>Desired Category:</strong> ${record.desired_category}</li>
+        </ul>
+        <p>Reply "Upgrade my booking" in the chat to claim this upgrade. Please note that availability is subject to change until you confirm.</p>
       `;
     }
 

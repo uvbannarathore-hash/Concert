@@ -234,6 +234,200 @@ def link_telegram_account(chat_id: str, email: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Seat Upgrade Monitor Tools
+# ---------------------------------------------------------------------------
+
+def request_seat_upgrade(user_id: str, booking_id: str, desired_category: str) -> dict:
+    # 1. Fetch booking
+    booking_res = supabase_admin.table("bookings").select("*").eq("booking_id", booking_id).eq("user_id", user_id).execute()
+    if not booking_res.data:
+        return {"success": False, "message": "Booking not found or does not belong to you."}
+    booking = booking_res.data[0]
+    
+    if booking["status"] != "Confirmed":
+        return {"success": False, "message": f"Cannot upgrade booking with status: {booking['status']}. Only Confirmed bookings can be upgraded."}
+        
+    current_category = booking["category"]
+    if current_category == desired_category:
+        return {"success": False, "message": "You are already booked in this category."}
+        
+    # Check if category exists
+    cat_res = supabase_admin.table("ticket_categories").select("*").eq("event_id", booking["event_id"]).eq("category", desired_category).execute()
+    if not cat_res.data:
+        return {"success": False, "message": f"Category {desired_category} does not exist for this event."}
+        
+    # Upsert logic to handle duplicates, but since we have a unique index on active/notified
+    # we can just try inserting
+    try:
+        supabase_admin.table("seat_upgrade_requests").insert({
+            "user_id": user_id,
+            "original_booking_id": booking_id,
+            "event_id": booking["event_id"],
+            "current_category": current_category,
+            "desired_category": desired_category,
+            "status": "active"
+        }).execute()
+        return {"success": True, "message": f"Upgrade requested to {desired_category}. We will notify you if seats become available."}
+    except Exception as e:
+        if "idx_seat_upgrade_requests_unique_active" in str(e):
+            # The AI might have called request_seat_upgrade instead of approve_seat_upgrade
+            # because the user just said "Upgrade my booking". Check if it's actually notified.
+            req_res = supabase_admin.table("seat_upgrade_requests").select("status").eq("original_booking_id", booking_id).eq("user_id", user_id).eq("desired_category", desired_category).in_("status", ["notified", "payment_pending", "refund_pending"]).execute()
+            if req_res.data:
+                # Intercept and automatically route to the approval flow
+                return approve_seat_upgrade(user_id, booking_id)
+                
+            return {"success": False, "message": f"You already have an active monitoring request for {desired_category}."}
+        return {"success": False, "message": f"Could not request upgrade: {e}"}
+
+def approve_seat_upgrade(user_id: str, booking_id: str) -> dict:
+    from app.services.cancellation_service import _fetch_payment_and_refunds, _reconcile_refund_state
+    from app.config import RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET
+    import razorpay
+    
+    # 1. Find the request in any pending state
+    req_res = supabase_admin.table("seat_upgrade_requests").select("*").eq("original_booking_id", booking_id).eq("user_id", user_id).in_("status", ["notified", "processing", "payment_pending", "refund_pending"]).execute()
+    
+    if not req_res.data:
+        return {"success": False, "message": "No active upgrade request found for this booking."}
+    
+    request = req_res.data[0]
+    req_id = request["id"]
+    
+    if request["status"] == "payment_pending":
+        return {"success": False, "message": "You already approved this upgrade. Please complete the pending payment."}
+        
+    # Attempt to lock and claim if it's notified or stuck in processing
+    if request["status"] in ["notified", "processing"]:
+        claim_res = supabase_admin.rpc("claim_seat_upgrade", {"p_request_id": req_id, "p_user_id": user_id}).execute()
+        if not claim_res.data:
+            return {"success": False, "message": "This upgrade request is currently being processed by another action or is no longer valid."}
+        # Reload request state after claiming
+        request["status"] = "processing"
+        
+    desired_category = request["desired_category"]
+    current_category = request["current_category"]
+    
+    cat_res = supabase_admin.table("ticket_categories").select("*").eq("event_id", request["event_id"]).in_("category", [current_category, desired_category]).execute()
+    cats = {c["category"]: c for c in cat_res.data}
+    
+    if desired_category not in cats or current_category not in cats:
+        return {"success": False, "message": "Categories not found."}
+        
+    booking_res = supabase_admin.table("bookings").select("*").eq("booking_id", booking_id).execute()
+    booking = booking_res.data[0]
+    
+    seats_booked = booking["seats_booked"]
+    
+    desired_cat_data = cats[desired_category]
+    current_cat_data = cats[current_category]
+    
+    new_price = float(desired_cat_data["price_inr"]) * seats_booked
+    old_price = float(booking.get("total_amount") or (float(current_cat_data["price_inr"]) * seats_booked))
+    price_diff = new_price - old_price
+    
+    if price_diff > 0:
+        # More expensive. Generate payment link.
+        # We need to ensure we don't double generate.
+        # Check if availability is still there before generating payment link
+        if desired_cat_data["available_seats"] < seats_booked:
+            supabase_admin.table("seat_upgrade_requests").update({"status": "active"}).eq("id", req_id).execute()
+            return {"success": False, "message": f"Sorry, {desired_category} is no longer available. You have been returned to the active monitoring queue."}
+            
+        razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+        amount_paise = int(round(price_diff * 100))
+        link_payload = {
+            "amount": amount_paise,
+            "currency": "INR",
+            "description": f"Upgrade to {desired_category} for {seats_booked} seats",
+            "notify": {"sms": False, "email": False},
+            "notes": {"upgrade_request_id": req_id, "booking_id": booking_id},
+        }
+        try:
+            payment_link = razorpay_client.payment_link.create(link_payload)
+            supabase_admin.table("seat_upgrade_requests").update({
+                "status": "payment_pending",
+            }).eq("id", req_id).execute()
+            
+            return {
+                "success": True, 
+                "message": f"The new seats cost more. Please pay the difference of INR {price_diff} using this secure link: {payment_link.get('short_url')} . The upgrade will be processed automatically once payment is confirmed."
+            }
+        except Exception as e:
+            supabase_admin.table("seat_upgrade_requests").update({"status": "notified"}).eq("id", req_id).execute()
+            return {"success": False, "message": f"Could not generate payment link: {e}"}
+            
+    elif price_diff < 0:
+        # Cheaper. Refund difference.
+        
+        # If it's already refund_pending, we skip the DB swap because we already swapped categories in the DB previously.
+        if request["status"] != "refund_pending":
+            # DB First: Safely swap seats and update booking inside DB transaction
+            try:
+                # RPC will throw if unavailable
+                downgrade_res = supabase_admin.rpc("process_seat_downgrade", {"p_request_id": req_id}).execute()
+            except Exception as e:
+                # If unavailable, return to active monitor
+                if "Not enough seats" in str(e):
+                    supabase_admin.table("seat_upgrade_requests").update({"status": "active"}).eq("id", req_id).execute()
+                    return {"success": False, "message": f"Sorry, {desired_category} is no longer available. You have been returned to the active monitoring queue."}
+                return {"success": False, "message": f"Could not downgrade booking: {e}"}
+        
+        razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+        refund_amount = abs(price_diff)
+        refund_amount_paise = int(round(refund_amount * 100))
+        
+        razorpay_payment_id = booking.get("razorpay_payment_id")
+        if not razorpay_payment_id:
+            # We are stuck in refund_pending but cannot refund. 
+            return {"success": False, "message": "Booking was downgraded successfully, but cannot process refund because original payment ID is missing."}
+            
+        try:
+            payment_info, refunds_list = _fetch_payment_and_refunds(razorpay_payment_id)
+            captured_amount = payment_info.get("amount") or 0
+            recon = _reconcile_refund_state(payment_info, refunds_list, captured_amount)
+            
+            # Check if there's enough refundable amount
+            if recon["remaining_refundable_amount"] < refund_amount_paise:
+                return {"success": False, "message": "Booking was downgraded successfully, but cannot refund difference: Payment is already partially or fully refunded."}
+                
+            refund = razorpay_client.payment.refund(razorpay_payment_id, {
+                "amount": refund_amount_paise,
+                "notes": {"booking_id": booking_id, "reason": "seat_upgrade_downgrade", "upgrade_request_id": req_id}
+            })
+            
+            # 3. Update request
+            supabase_admin.table("seat_upgrade_requests").update({
+                "status": "upgraded"
+            }).eq("id", req_id).execute()
+            
+            return {"success": True, "message": f"Successfully downgraded to {desired_category}. A refund of INR {refund_amount} has been initiated."}
+            
+        except Exception as e:
+            # Remain in refund_pending for future retry
+            return {"success": False, "message": f"Booking downgraded to {desired_category} successfully, but Razorpay refund failed: {e}. You can ask me to approve the upgrade again later to retry the refund."}
+    
+    else:
+        # Equal price
+        if request["status"] != "processing":
+            return {"success": False, "message": "Request state invalid for equal price swap."}
+            
+        try:
+            # Since there is no refund or payment, we can just use the finalize flow, but we can also use process_seat_downgrade and then immediately set to upgraded.
+            downgrade_res = supabase_admin.rpc("process_seat_downgrade", {"p_request_id": req_id}).execute()
+            
+            supabase_admin.table("seat_upgrade_requests").update({
+                "status": "upgraded"
+            }).eq("id", req_id).execute()
+            
+            return {"success": True, "message": f"Successfully upgraded to {desired_category} at no extra cost!"}
+        except Exception as e:
+            if "Not enough seats" in str(e):
+                supabase_admin.table("seat_upgrade_requests").update({"status": "active"}).eq("id", req_id).execute()
+                return {"success": False, "message": f"Sorry, {desired_category} is no longer available. You have been returned to the monitoring queue."}
+            return {"success": False, "message": f"Upgrade failed: {e}"}
+
+# ---------------------------------------------------------------------------
 # Concierge Agent Tools (Mocked external APIs)
 # ---------------------------------------------------------------------------
 
@@ -622,6 +816,29 @@ FUNCTION_DECLARATIONS = [
             },
             "required": ["event_id", "plan_json"]
         }
+    },
+    {
+        "name": "request_seat_upgrade",
+        "description": "Use this tool when a user wants to upgrade their existing booking to a better category (e.g. VIP), but it is currently sold out. This adds them to the automated monitor which will alert them via Telegram/Email if seats become available.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "booking_id": {"type": "string", "description": "The user's existing booking ID to upgrade."},
+                "desired_category": {"type": "string", "description": "The target ticket category they want to upgrade to (e.g., 'VIP')."}
+            },
+            "required": ["booking_id", "desired_category"]
+        }
+    },
+    {
+        "name": "approve_seat_upgrade",
+        "description": "Use this tool ONLY after the user has received a seat upgrade availability notification and responds in chat saying they want to proceed with the upgrade (e.g., 'Yes, upgrade my tickets' or 'Approve the upgrade'). If the upgrade costs more, it returns a Razorpay payment link. If cheaper, it automatically downgrades and initiates a refund. Tell the user the outcome clearly.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "booking_id": {"type": "string", "description": "The user's original booking ID for which they were notified about the upgrade."}
+            },
+            "required": ["booking_id"]
+        }
     }
 ]
 
@@ -646,4 +863,6 @@ TOOL_HANDLERS = {
     "restaurant_suggestions": restaurant_suggestions,
     "build_itinerary": build_itinerary,
     "save_itinerary": save_itinerary,
+    "request_seat_upgrade": request_seat_upgrade,
+    "approve_seat_upgrade": approve_seat_upgrade,
 }

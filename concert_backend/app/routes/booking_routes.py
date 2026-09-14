@@ -517,6 +517,54 @@ async def razorpay_webhook(request: Request):
         payment_entity = payload["payload"]["payment"]["entity"]
         razorpay_payment_id = payment_entity["id"]
 
+        # Check if this is a seat upgrade payment
+        notes = entity.get("notes", {})
+        upgrade_request_id = notes.get("upgrade_request_id")
+        
+        if upgrade_request_id:
+            # Handle seat upgrade
+            req_res = supabase_admin.table("seat_upgrade_requests").select("*").eq("id", upgrade_request_id).execute()
+            if req_res.data:
+                req = req_res.data[0]
+                if req["status"] == "payment_pending":
+                    # Verify mathematical amount match
+                    booking_res = supabase_admin.table("bookings").select("*").eq("booking_id", req["original_booking_id"]).execute()
+                    if booking_res.data:
+                        booking_row = booking_res.data[0]
+                        seats_booked = booking_row["seats_booked"]
+                        
+                        try:
+                            # Re-fetch new category price
+                            ticket_row = _get_ticket_or_404(req["event_id"], req["desired_category"])
+                            new_total = float(ticket_row["price_inr"]) * seats_booked
+                            
+                            # Re-fetch old total
+                            old_total = float(booking_row.get("total_amount") or 0)
+                            if old_total == 0:
+                                current_ticket_row = _get_ticket_or_404(req["event_id"], req["current_category"])
+                                old_total = float(current_ticket_row["price_inr"]) * seats_booked
+                            
+                            price_diff = new_total - old_total
+                            expected_amount_paise = int(round(price_diff * 100))
+                            paid_amount_paise = payment_entity.get("amount", 0)
+                            
+                            if paid_amount_paise != expected_amount_paise:
+                                logger.error(f"Seat upgrade webhook amount mismatch. Expected: {expected_amount_paise}, Paid: {paid_amount_paise}")
+                                # Refund the invalid amount or handle manually later
+                                return {"status": "ok"}
+                                
+                            # Atomic lock and finalize
+                            supabase_admin.rpc("finalize_seat_upgrade", {
+                                "p_request_id": upgrade_request_id,
+                                "p_razorpay_payment_id": razorpay_payment_id,
+                                "p_payment_amount": paid_amount_paise / 100.0
+                            }).execute()
+                            
+                        except Exception as e:
+                            logger.error(f"Failed to process seat upgrade webhook for request {upgrade_request_id}: {e}")
+            return {"status": "ok"}
+
+        # Original Booking Flow
         booking = (
             supabase_admin.table("bookings")
             .select("*")
