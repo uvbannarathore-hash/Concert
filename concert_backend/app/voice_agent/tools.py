@@ -89,11 +89,45 @@ def _split_seat_numbers(seat_numbers: str) -> list[str] | None:
     return [s for s in raw.split(",") if s]
 
 
+# Deterministic allow-list mapping a spoken/typed status word to the exact
+# value voice_db.search_events' status_filter expects. Mirrors the "status"
+# enum ["Upcoming", "Sold Out"] already exposed to Chat AI in
+# app/agents/customer_tools.py's FUNCTION_DECLARATIONS - same two values,
+# same meaning (leave unset to search both, like search_events' own
+# default). Deliberately a fixed allow-list rather than passing the model's
+# string straight through: it guarantees a model can never smuggle
+# "Cancelled"/"Completed"/anything else into status_filter, regardless of
+# how it's asked - no LLM-schema-enum reliance needed since Voice can run
+# against providers (Groq/Ollama fallback) that don't enforce one as
+# strictly as Gemini's structured output does.
+_ALLOWED_STATUS_FILTERS = {"upcoming": "Upcoming", "sold out": "Sold Out", "soldout": "Sold Out"}
+
+
+def _normalize_status_filter(status: str) -> str | None:
+    """Returns the exact DB status value for a caller-facing status word,
+    or None (meaning: no filter - voice_db.search_events' own default of
+    Upcoming + Sold Out applies) for anything empty or not recognized."""
+    if not status:
+        return None
+    return _ALLOWED_STATUS_FILTERS.get(status.strip().lower())
+
+
 class ConcertBookingTools:
-    """Tools exposed to the LLM agent for booking tickets for all supported event types over a phone call."""
+    """Tools exposed to the LLM agent for booking tickets for all supported event types over a phone call.
+
+    caller_phone is bound here at construction time from the SIP participant's
+    caller-ID-derived identity (see agent.py's entrypoint) - never taken from
+    a model-supplied tool argument. This mirrors how ConcertBookingToolsWeb
+    below binds user_id: the caller's identity must not be something the LLM
+    can pick, guess, or override on a per-call basis, or a caller could ask
+    the assistant to look up, cancel, or book against a phone number that
+    isn't actually theirs."""
+
+    def __init__(self, caller_phone: str):
+        self.caller_phone = caller_phone
 
     @function_tool
-    async def search_events(self, query: str = "", city: str = "", temporal_intent: str = "", specific_month: int = 0) -> str:
+    async def search_events(self, query: str = "", city: str = "", temporal_intent: str = "", specific_month: int = 0, status: str = "") -> str:
         """Search for upcoming events by artist name, city, and/or time period. Use this
         first to find the event_id before checking tickets or booking. Also use this for
         generic requests like 'what's upcoming' or 'any events tomorrow' - never answer
@@ -104,10 +138,11 @@ class ConcertBookingTools:
             city: City to filter by, e.g. 'Indore'. Optional.
             temporal_intent: Optional time filter. One of TODAY, TOMORROW, THIS_WEEK, THIS_WEEKEND, NEXT_WEEK, NEXT_WEEKEND, THIS_MONTH, NEXT_MONTH.
             specific_month: Optional specific month number (1-12), only if the caller names a specific month like 'December'.
+            status: Optional. Pass 'Upcoming' if the caller specifically wants only events that are NOT sold out, or 'Sold Out' if they specifically ask which events are sold out (e.g. 'which events are sold out'). Leave empty otherwise - the default already includes both upcoming and sold-out events.
         """
-        logger.info(f"Executing Tool search_events query={query}, city={city}, temporal_intent={temporal_intent}, specific_month={specific_month}")
+        logger.info(f"Executing Tool search_events query={query}, city={city}, temporal_intent={temporal_intent}, specific_month={specific_month}, status={status}")
         res = await asyncio.to_thread(
-            voice_db.search_events, query or None, city or None, temporal_intent or None, specific_month or None
+            voice_db.search_events, query or None, city or None, temporal_intent or None, specific_month or None, _normalize_status_filter(status)
         )
         return res["message"]
 
@@ -144,33 +179,31 @@ class ConcertBookingTools:
         self,
         event_id: str,
         category: str,
-        caller_phone: str,
         seats: int = 0,
         seat_numbers: str = "",
         caller_name: str = "",
     ) -> str:
-        """Book tickets for the caller for any supported event type. Must collect event_id,
-        category, and confirm the caller's phone number and name before calling this. For
-        events with a seat map (has_seat_map=true from get_available_seats), ask which
-        specific seats the caller wants and pass them as seat_numbers (e.g. 'N5, N6') - or
-        if they say 'any 2 seats', pass seats as a plain count instead. For events without
-        a seat map, always just use seats as a count.
+        """Book tickets for the caller for any supported event type. Must collect event_id
+        and category, and confirm out loud before calling this. For events with a seat map
+        (has_seat_map=true from get_available_seats), ask which specific seats the caller
+        wants and pass them as seat_numbers (e.g. 'N5, N6') - or if they say 'any 2 seats',
+        pass seats as a plain count instead. For events without a seat map, always just use
+        seats as a count.
 
         Args:
             event_id: The event_id to book.
             category: Ticket category, e.g. 'VIP', 'Gold', 'Silver' — must match get_ticket_categories exactly.
-            caller_phone: The caller's phone number (from caller ID or confirmed verbally).
             seats: Number of seats to book - use this OR seat_numbers, not both.
             seat_numbers: Specific seats the caller chose, comma-separated e.g. 'N5, N6' - only for events with a seat map. Use this OR seats, not both.
             caller_name: The caller's name.
         """
         logger.info(
             f"Executing Tool book_ticket event_id={event_id}, category={category}, "
-            f"seats={seats}, seat_numbers={seat_numbers}, phone={caller_phone}"
+            f"seats={seats}, seat_numbers={seat_numbers}, phone={self.caller_phone}"
         )
         res = await asyncio.to_thread(
             voice_db.book_ticket,
-            caller_phone,
+            self.caller_phone,
             event_id,
             category,
             seats or None,
@@ -180,37 +213,36 @@ class ConcertBookingTools:
         return res["message"]
 
     @function_tool
-    async def get_booking_status(self, caller_phone: str, temporal_intent: str = "", specific_month: int = 0) -> str:
-        """Check the status of a caller's existing bookings using their phone number.
-        Optionally filter by time period, e.g. 'this month' or 'in December'.
+    async def get_booking_status(self, temporal_intent: str = "", specific_month: int = 0) -> str:
+        """Check the status of the caller's own existing bookings, using the phone number
+        this call is already identified by. Optionally filter by time period, e.g. 'this
+        month' or 'in December'.
 
         Args:
-            caller_phone: The caller's phone number.
             temporal_intent: Optional time filter. One of TODAY, TOMORROW, THIS_WEEK, THIS_WEEKEND, NEXT_WEEK, NEXT_WEEKEND, THIS_MONTH, NEXT_MONTH.
             specific_month: Optional specific month number (1-12), only if the caller names a specific month.
         """
-        logger.info(f"Executing Tool get_booking_status phone={caller_phone}, temporal_intent={temporal_intent}, specific_month={specific_month}")
-        res = await asyncio.to_thread(voice_db.get_booking_status, caller_phone, temporal_intent or None, specific_month or None)
+        logger.info(f"Executing Tool get_booking_status phone={self.caller_phone}, temporal_intent={temporal_intent}, specific_month={specific_month}")
+        res = await asyncio.to_thread(voice_db.get_booking_status, self.caller_phone, temporal_intent or None, specific_month or None)
         return res["message"]
 
     @function_tool
-    async def check_cancellation_eligibility(self, caller_phone: str, booking_id: str) -> str:
-        """Check whether a booking can be cancelled and what the refund/fee breakdown
-        would be. ALWAYS call this and read the refund amount to the caller, then get
-        their explicit confirmation, BEFORE calling cancel_booking. Never invent
-        cancellation policies or refund amounts.
+    async def check_cancellation_eligibility(self, booking_id: str) -> str:
+        """Check whether one of the caller's own bookings can be cancelled and what the
+        refund/fee breakdown would be. ALWAYS call this and read the refund amount to the
+        caller, then get their explicit confirmation, BEFORE calling cancel_booking. Never
+        invent cancellation policies or refund amounts.
 
         Args:
-            caller_phone: The caller's phone number.
             booking_id: The booking_id to check.
         """
-        logger.info(f"Executing Tool check_cancellation_eligibility phone={caller_phone}, booking_id={booking_id}")
-        eligibility = await asyncio.to_thread(voice_db.check_cancellation_eligibility_for_phone, caller_phone, booking_id)
+        logger.info(f"Executing Tool check_cancellation_eligibility phone={self.caller_phone}, booking_id={booking_id}")
+        eligibility = await asyncio.to_thread(voice_db.check_cancellation_eligibility_for_phone, self.caller_phone, booking_id)
         return _format_eligibility(eligibility)
 
     @function_tool
-    async def cancel_booking(self, caller_phone: str, booking_id: str) -> str:
-        """Cancel one of the caller's existing bookings. Only call this AFTER
+    async def cancel_booking(self, booking_id: str) -> str:
+        """Cancel one of the caller's own existing bookings. Only call this AFTER
         check_cancellation_eligibility was already called in this conversation and the
         caller has clearly confirmed (e.g. 'yes', 'confirm', 'cancel it') after hearing
         the refund breakdown. Automatically restores seats and initiates the Razorpay
@@ -218,18 +250,19 @@ class ConcertBookingTools:
         without checking the tool response.
 
         Args:
-            caller_phone: The caller's phone number.
             booking_id: The booking_id to cancel.
         """
-        logger.info(f"Executing Tool cancel_booking phone={caller_phone}, booking_id={booking_id}")
-        res = await asyncio.to_thread(voice_db.cancel_booking, caller_phone, booking_id)
+        logger.info(f"Executing Tool cancel_booking phone={self.caller_phone}, booking_id={booking_id}")
+        res = await asyncio.to_thread(voice_db.cancel_booking, self.caller_phone, booking_id)
         return res["message"]
 
     @function_tool
     async def get_buy_advice(self, event_id: str) -> str:
         """Get the deterministic 'buy now vs wait' demand signal for a specific event -
-        percent sold, days left, and urgency. Use for questions like 'is this selling
-        fast' or 'should I buy now or wait'. NEVER invent these metrics yourself.
+        percent sold, days left, and urgency. Use for any demand/urgency question, e.g.
+        'is this selling fast', 'should I buy now or wait', 'how many tickets are left',
+        'is this in high demand', or 'are seats running out'. NEVER invent these metrics
+        yourself.
 
         Args:
             event_id: The event ID (resolved from search_events).
@@ -248,8 +281,11 @@ class ConcertBookingTools:
         preference: str = "",
     ) -> str:
         """Get deterministic seat or ticket-category recommendations for a specific
-        event - cheapest, premium, N seats together, or a price limit. Only returns
-        seats that are actually available right now. Never invent seat numbers.
+        event - cheapest, premium, N seats together, or a price limit. Use for requests
+        like 'best seats', 'cheap seats', 'cheapest tickets', 'premium seats', 'seats
+        under [price]', 'N seats together', 'best value', or 'which seats should I get'.
+        Only returns seats that are actually available right now. Never invent seat
+        numbers.
 
         Args:
             event_id: The event ID (resolved from search_events).
@@ -265,15 +301,12 @@ class ConcertBookingTools:
         return _format_seat_recommendations(result)
 
     @function_tool
-    async def get_user_hosted_shows(self, caller_phone: str) -> str:
-        """Check the shows this caller has hosted or submitted themselves. Never invent
-        or infer this from conversation memory.
-
-        Args:
-            caller_phone: The caller's phone number.
-        """
-        logger.info(f"Executing Tool get_user_hosted_shows phone={caller_phone}")
-        res = await asyncio.to_thread(voice_db.get_user_hosted_shows_for_phone, caller_phone)
+    async def get_user_hosted_shows(self) -> str:
+        """Check the shows this caller has hosted or submitted themselves, using the phone
+        number this call is already identified by. Never invent or infer this from
+        conversation memory."""
+        logger.info(f"Executing Tool get_user_hosted_shows phone={self.caller_phone}")
+        res = await asyncio.to_thread(voice_db.get_user_hosted_shows_for_phone, self.caller_phone)
         return res["message"]
 
 
@@ -290,7 +323,7 @@ class ConcertBookingToolsWeb:
         self.user_id = user_id
 
     @function_tool
-    async def search_events(self, query: str = "", city: str = "", temporal_intent: str = "", specific_month: int = 0) -> str:
+    async def search_events(self, query: str = "", city: str = "", temporal_intent: str = "", specific_month: int = 0, status: str = "") -> str:
         """Search for upcoming events by artist name, city, and/or time period. Use this
         first to find the event_id before checking tickets or booking. Also use this for
         generic requests like 'what's upcoming' or 'any events tomorrow' - never answer
@@ -301,10 +334,11 @@ class ConcertBookingToolsWeb:
             city: City to filter by, e.g. 'Indore'. Optional.
             temporal_intent: Optional time filter. One of TODAY, TOMORROW, THIS_WEEK, THIS_WEEKEND, NEXT_WEEK, NEXT_WEEKEND, THIS_MONTH, NEXT_MONTH.
             specific_month: Optional specific month number (1-12), only if the user names a specific month like 'December'.
+            status: Optional. Pass 'Upcoming' if the user specifically wants only events that are NOT sold out, or 'Sold Out' if they specifically ask which events are sold out (e.g. 'which events are sold out'). Leave empty otherwise - the default already includes both upcoming and sold-out events.
         """
-        logger.info(f"[web:{self.user_id}] Executing Tool search_events query={query}, city={city}, temporal_intent={temporal_intent}, specific_month={specific_month}")
+        logger.info(f"[web:{self.user_id}] Executing Tool search_events query={query}, city={city}, temporal_intent={temporal_intent}, specific_month={specific_month}, status={status}")
         res = await asyncio.to_thread(
-            voice_db.search_events, query or None, city or None, temporal_intent or None, specific_month or None
+            voice_db.search_events, query or None, city or None, temporal_intent or None, specific_month or None, _normalize_status_filter(status)
         )
         return res["message"]
 
@@ -410,8 +444,10 @@ class ConcertBookingToolsWeb:
     @function_tool
     async def get_buy_advice(self, event_id: str) -> str:
         """Get the deterministic 'buy now vs wait' demand signal for a specific event -
-        percent sold, days left, and urgency. Use for questions like 'is this selling
-        fast' or 'should I buy now or wait'. NEVER invent these metrics yourself.
+        percent sold, days left, and urgency. Use for any demand/urgency question, e.g.
+        'is this selling fast', 'should I buy now or wait', 'how many tickets are left',
+        'is this in high demand', or 'are seats running out'. NEVER invent these metrics
+        yourself.
 
         Args:
             event_id: The event ID (resolved from search_events).
@@ -430,8 +466,11 @@ class ConcertBookingToolsWeb:
         preference: str = "",
     ) -> str:
         """Get deterministic seat or ticket-category recommendations for a specific
-        event - cheapest, premium, N seats together, or a price limit. Only returns
-        seats that are actually available right now. Never invent seat numbers.
+        event - cheapest, premium, N seats together, or a price limit. Use for requests
+        like 'best seats', 'cheap seats', 'cheapest tickets', 'premium seats', 'seats
+        under [price]', 'N seats together', 'best value', or 'which seats should I get'.
+        Only returns seats that are actually available right now. Never invent seat
+        numbers.
 
         Args:
             event_id: The event ID (resolved from search_events).
