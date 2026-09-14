@@ -87,6 +87,30 @@ def resolve_temporal_intent(intent: str | None, specific_month: int | None = Non
         start_date = today.replace(year=y, month=m, day=1)
         _, last_day = monthrange(y, m)
         end_date = start_date + timedelta(days=last_day)
+    elif intent.startswith("THIS_") or intent.startswith("NEXT_"):
+        # Handle specific days like THIS_SATURDAY, NEXT_TUESDAY
+        days_of_week = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]
+        parts = intent.split("_")
+        if len(parts) == 2 and parts[1] in days_of_week:
+            target_weekday = days_of_week.index(parts[1])
+            current_weekday = today.weekday()
+            
+            # Days ahead to the next occurrence of that weekday
+            days_ahead = target_weekday - current_weekday
+            if days_ahead <= 0:
+                days_ahead += 7
+                
+            if parts[0] == "NEXT":
+                days_ahead += 7
+                
+            start_date = today + timedelta(days=days_ahead)
+            # If it's today and they said "THIS_TUESDAY" and today is Tuesday, days_ahead is 7.
+            # But normally "this Tuesday" when today is Tuesday means today. Let's adjust:
+            if parts[0] == "THIS" and days_ahead == 7:
+                days_ahead = 0
+                start_date = today
+                
+            end_date = start_date + timedelta(days=1)
         
     if start_date and end_date:
         return start_date.isoformat(), end_date.isoformat()
@@ -197,7 +221,7 @@ def search_events(query: str | None = None, city: str | None = None, temporal_in
         q = q.gte("event_date", today)
 
     if city:
-        q = q.eq("city", city)
+        q = q.ilike("city", f"%{city}%")
 
     result = q.execute()
 

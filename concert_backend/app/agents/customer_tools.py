@@ -234,6 +234,70 @@ def link_telegram_account(chat_id: str, email: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Concierge Agent Tools (Mocked external APIs)
+# ---------------------------------------------------------------------------
+
+def maps_directions(origin: str, destination: str) -> dict:
+    """Mock Mapbox/Google Maps directions API."""
+    # Deterministic mock based on length of strings to simulate varying times
+    dist_km = (len(origin) + len(destination)) % 15 + 2
+    time_mins = dist_km * 4
+    cab_fare = dist_km * 20 + 50
+    return {
+        "success": True,
+        "distance_km": dist_km,
+        "estimated_time_mins": time_mins,
+        "estimated_cab_fare_inr": cab_fare,
+        "mode": "driving"
+    }
+
+def restaurant_suggestions(city: str, budget_inr: float = 1500) -> dict:
+    """Mock Zomato/Google Places restaurant search."""
+    # Deterministic mock
+    return {
+        "success": True,
+        "restaurants": [
+            {"name": "The Grand Local", "cuisine": "North Indian", "cost_for_two": 1200, "rating": 4.5, "distance_from_center_km": 2},
+            {"name": "Spice Route", "cuisine": "Pan Asian", "cost_for_two": 1800, "rating": 4.2, "distance_from_center_km": 3.5},
+            {"name": "Bistro Cafe", "cuisine": "Continental", "cost_for_two": 800, "rating": 4.1, "distance_from_center_km": 1.5}
+        ]
+    }
+
+def save_itinerary(user_id: str, event_id: str, plan_json: str) -> dict:
+    """Saves the approved 'Plan My Night' itinerary to the database."""
+    try:
+        import json
+        if isinstance(plan_json, str):
+            plan_data = json.loads(plan_json)
+        else:
+            plan_data = plan_json
+        
+        result = supabase_admin.table("user_itineraries").insert({
+            "user_id": user_id,
+            "event_id": event_id,
+            "plan_json": plan_data
+        }).execute()
+        return {"success": True, "message": "Itinerary saved successfully."}
+    except Exception as e:
+        return {"success": False, "message": f"Failed to save itinerary: {str(e)}"}
+
+def build_itinerary(ticket_price: float, group_size: int, cab_fare: float, restaurant_cost_for_two: float) -> dict:
+    """Calculates itinerary totals deterministically."""
+    total_ticket_cost = ticket_price * group_size
+    # Pro-rate restaurant cost based on cost_for_two
+    restaurant_cost = (restaurant_cost_for_two / 2.0) * group_size
+    total_cost = total_ticket_cost + cab_fare + restaurant_cost
+    
+    return {
+        "success": True,
+        "total_ticket_cost_inr": total_ticket_cost,
+        "total_restaurant_cost_inr": restaurant_cost,
+        "total_cab_fare_inr": cab_fare,
+        "grand_total_inr": total_cost,
+        "message": f"Deterministic grand total is INR {total_cost}"
+    }
+
+# ---------------------------------------------------------------------------
 # Gemini function declarations (JSON schema)
 #
 # Deliberately no user_id/chat_id parameter on any of these - customer_agent.py
@@ -252,7 +316,7 @@ FUNCTION_DECLARATIONS = [
                 "temporal_intent": {
                     "type": "string",
                     "description": "Optional temporal constraint inferred from the user query.",
-                    "enum": ["TODAY", "TOMORROW", "THIS_WEEK", "THIS_WEEKEND", "NEXT_WEEK", "NEXT_WEEKEND", "THIS_MONTH", "NEXT_MONTH", "ALL"]
+                    "enum": ["TODAY", "TOMORROW", "THIS_WEEK", "THIS_WEEKEND", "NEXT_WEEK", "NEXT_WEEKEND", "THIS_MONTH", "NEXT_MONTH", "ALL", "THIS_MONDAY", "THIS_TUESDAY", "THIS_WEDNESDAY", "THIS_THURSDAY", "THIS_FRIDAY", "THIS_SATURDAY", "THIS_SUNDAY", "NEXT_MONDAY", "NEXT_TUESDAY", "NEXT_WEDNESDAY", "NEXT_THURSDAY", "NEXT_FRIDAY", "NEXT_SATURDAY", "NEXT_SUNDAY"]
                 },
                 "specific_month": {
                     "type": "integer",
@@ -332,7 +396,7 @@ FUNCTION_DECLARATIONS = [
                 "temporal_intent": {
                     "type": "string",
                     "description": "Optional temporal constraint inferred from the user query.",
-                    "enum": ["TODAY", "TOMORROW", "THIS_WEEK", "THIS_WEEKEND", "NEXT_WEEK", "NEXT_WEEKEND", "THIS_MONTH", "NEXT_MONTH", "ALL"]
+                    "enum": ["TODAY", "TOMORROW", "THIS_WEEK", "THIS_WEEKEND", "NEXT_WEEK", "NEXT_WEEKEND", "THIS_MONTH", "NEXT_MONTH", "ALL", "THIS_MONDAY", "THIS_TUESDAY", "THIS_WEDNESDAY", "THIS_THURSDAY", "THIS_FRIDAY", "THIS_SATURDAY", "THIS_SUNDAY", "NEXT_MONDAY", "NEXT_TUESDAY", "NEXT_WEDNESDAY", "NEXT_THURSDAY", "NEXT_FRIDAY", "NEXT_SATURDAY", "NEXT_SUNDAY"]
                 },
                 "specific_month": {
                     "type": "integer",
@@ -389,6 +453,56 @@ FUNCTION_DECLARATIONS = [
             },
             "required": ["event_id"]
         }
+    },
+    {
+        "name": "maps_directions",
+        "description": "Mock tool to estimate travel distance and time between two locations (e.g. from event venue to restaurant). Returns distance, estimated time, and estimated cab fare.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "origin": {"type": "string", "description": "Starting location"},
+                "destination": {"type": "string", "description": "Ending location"}
+            },
+            "required": ["origin", "destination"]
+        }
+    },
+    {
+        "name": "restaurant_suggestions",
+        "description": "Mock tool to suggest restaurants in a city within a given budget. Returns a list of restaurants.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "city": {"type": "string", "description": "City to search in"},
+                "budget_inr": {"type": "number", "description": "Budget in INR for dining"}
+            },
+            "required": ["city"]
+        }
+    },
+    {
+        "name": "build_itinerary",
+        "description": "Calculates itinerary totals deterministically based on ticket price, group size, cab fare, and restaurant cost.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ticket_price": {"type": "number", "description": "Price per ticket"},
+                "group_size": {"type": "integer", "description": "Number of people"},
+                "cab_fare": {"type": "number", "description": "Estimated cab fare"},
+                "restaurant_cost_for_two": {"type": "number", "description": "Restaurant cost for two"}
+            },
+            "required": ["ticket_price", "group_size", "cab_fare", "restaurant_cost_for_two"]
+        }
+    },
+    {
+        "name": "save_itinerary",
+        "description": "Use this tool to save a Plan My Night itinerary to the user's account AFTER they explicitly approve it. Do not call this before the user confirms the plan.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string", "description": "The event_id associated with this itinerary."},
+                "plan_json": {"type": "string", "description": "A JSON-formatted string detailing the full itinerary (event, restaurant, travel, budget)."}
+            },
+            "required": ["event_id", "plan_json"]
+        }
     }
 ]
 
@@ -409,4 +523,8 @@ TOOL_HANDLERS = {
     "link_telegram_account": link_telegram_account,
     "get_buy_advice": get_buy_advice,
     "advise_seats": advise_seats,
+    "maps_directions": maps_directions,
+    "restaurant_suggestions": restaurant_suggestions,
+    "build_itinerary": build_itinerary,
+    "save_itinerary": save_itinerary,
 }

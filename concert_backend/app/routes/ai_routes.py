@@ -1,10 +1,11 @@
 import logging
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, HTTPException, Body, Depends
 from pydantic import BaseModel
 from typing import List, Optional
 
 from app.supabase_client import supabase_anon
 from app.services.embedding_service import generate_query_embedding
+from app.auth import get_current_user
 
 logger = logging.getLogger("ai_routes")
 
@@ -87,3 +88,28 @@ def search_events(request: SearchRequest):
     except Exception as e:
         logger.error(f"Search API error: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error during search")
+
+class PlanRequest(BaseModel):
+    message: str
+    session_id: str
+
+@router.post("/plan")
+async def plan_my_night(payload: PlanRequest, current_user: dict = Depends(get_current_user)):
+    """
+    Endpoint for Plan My Night concierge agent.
+    Integrated with the existing Customer AI Chat architecture.
+    """
+    from app.agents import customer_agent
+    
+    if current_user.get("is_admin"):
+        raise HTTPException(
+            status_code=403,
+            detail="Admin accounts should use the Admin dashboard's agent chat instead.",
+        )
+
+    reply = await customer_agent.handle_website_message(
+        user_id=current_user["user_id"],
+        session_id=payload.session_id,
+        message=payload.message,
+    )
+    return {"reply": reply}

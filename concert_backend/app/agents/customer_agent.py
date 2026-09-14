@@ -135,6 +135,15 @@ If more than one showtime exists for the item at that position, ask which showti
 
 If the user explicitly corrects what an ordinal refers to (for example, "the third movie is Pushpa 2" after you listed something else in that position), treat that correction as authoritative and final for the rest of the conversation: call search_events for the corrected title/event to get its real event_id, and use that corrected event for every later reference to "the third movie" (or whatever ordinal they corrected) - do not fall back to the original, incorrect item at that position again, even though the original numbered list still shows something else there.
 
+PLAN MY NIGHT CONCIERGE WORKFLOW:
+When the user asks to "Plan My Night" or coordinate a full evening (including events, dinner, and travel) based on a budget, group size, and city:
+1. Search Events: Use search_events to find matching events in the specified city/date. Pick a good event and use get_ticket_categories to check prices.
+2. Suggest Restaurants: Use restaurant_suggestions to find dinner options in the same city.
+3. Estimate Travel: Use maps_directions to estimate travel time and cab fare between the event venue and the restaurant.
+4. Build Itinerary: Use the build_itinerary tool with the ticket price, group size, cab fare, and restaurant cost to deterministically calculate the grand total.
+5. Ask Confirmation: Present this complete itinerary (events, restaurants, travel, and the deterministic grand total) clearly to the user. Ask if they approve the plan. DO NOT book anything or save the itinerary yet.
+6. Finalize: Once the user explicitly approves the itinerary, FIRST use the save_itinerary tool to store the plan (pass the chosen event_id and the full plan as a JSON string), THEN use book_ticket_transaction to initiate the booking and present the payment link.
+
 2. Artist biography / venue details / general policies
 You do NOT currently have a tool for artist background, genre, popular songs, or venue facilities/capacity. If asked about these, say honestly that you don't have that information right now.
 For general cancellation policy questions (e.g. "What is the cancellation policy?"), answer from the configured LiveWire policy: Movies can be cancelled up to 20 minutes before showtime (75% refund if >= 2 hours, 50% refund if < 2 hours). Concerts/Live events cannot be cancelled. Do not fetch booking history for general policy questions. Never invent artist biography or venue details.
@@ -264,6 +273,10 @@ def _build_bound_handlers(user_id: str, chat_id: str | None) -> dict:
         "link_telegram_account": lambda email: _BASE_HANDLERS["link_telegram_account"](chat_id, email),
         "advise_seats": _BASE_HANDLERS["advise_seats"],
         "get_buy_advice": _BASE_HANDLERS["get_buy_advice"],
+        "maps_directions": _BASE_HANDLERS["maps_directions"],
+        "restaurant_suggestions": _BASE_HANDLERS["restaurant_suggestions"],
+        "build_itinerary": _BASE_HANDLERS["build_itinerary"],
+        "save_itinerary": lambda event_id, plan_json: _BASE_HANDLERS["save_itinerary"](user_id, event_id, plan_json),
     }
 
 
@@ -283,6 +296,7 @@ def classify_intent(message: str, history: list[types.Content]) -> IntentClassif
 - USER_DATA: Asking about their own bookings, wishlist, or hosted/submitted shows.
 - FOLLOW_UP: A query that clearly references a previous result ("which one", "the cheapest of those").
 - SEAT_ADVICE: User asks for seat or ticket‑category recommendations (e.g., "best seats", "cheap seats under 2000", "premium seats").
+- PLAN_MY_NIGHT: User asks to plan an evening, dinner, travel, or itinerary (e.g., "Plan my night in Mumbai", "Find an event and a restaurant").
 - GENERAL_LIVEWIRE: General questions about the platform capabilities.
 - OUT_OF_DOMAIN: Unrelated general knowledge, jokes, programming questions, weather, etc. Not related to events, bookings, or the LiveWire platform.
 
