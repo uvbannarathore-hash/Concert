@@ -1,8 +1,9 @@
 // supabase/functions/send-booking-notifications/index.ts
 //
 // This runs on Supabase's own infrastructure (Deno-based Edge Functions) -
-// NOT n8n. It's triggered by a Supabase Database Webhook whenever a row
-// in `bookings` is updated. No n8n execution is consumed for this at all.
+// NOT n8n. It is triggered by a Supabase Database Webhook for status updates
+// (Confirmed, Cancelled, Seat Upgrades), OR directly via a pg_net scheduler
+// invocation for Phase 3 Abandoned Checkouts. No n8n execution is consumed.
 
 import { serve } from "https://deno.land/std@0.203.0/http/server.ts";
 import { SMTPClient } from "https://deno.land/x/denomailer@1.6.0/mod.ts";
@@ -16,32 +17,48 @@ const WEBHOOK_SHARED_SECRET = Deno.env.get("DB_WEBHOOK_SHARED_SECRET")!; // set 
 
 serve(async (req) => {
   try {
-    // 1. Verify the request actually came from our own Supabase Database Webhook,
-    //    not some random caller hitting this public URL.
+    // 1. Verify the request actually came from our own Supabase Database Webhook OR secure pg_net cron
     const incomingSecret = req.headers.get("x-webhook-secret");
     if (incomingSecret !== WEBHOOK_SHARED_SECRET) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
     }
 
     const payload = await req.json();
-    const record = payload.record;      // the new row state
-    const oldRecord = payload.old_record; // the previous row state
+    let record;
+    let oldRecord = null;
+    let isAbandonedSchedulerPayload = false;
 
-    // 2. Only act when status just transitioned INTO "Confirmed", "Cancelled",
-    //    or when reminder_sent transitioned to true.
-    const justConfirmed =
-      record?.status === "Confirmed" && oldRecord?.status !== "Confirmed" && payload.table === "bookings";
+    // 2a. Explicit Scheduler Routing
+    if (payload.type === "abandoned_checkout" && payload.booking_id) {
+      isAbandonedSchedulerPayload = true;
+      const bookingRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/bookings?booking_id=eq.${payload.booking_id}&select=*`,
+        {
+          headers: {
+            apikey: SUPABASE_SERVICE_ROLE_KEY,
+            Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+          },
+        }
+      );
+      const bookings = await bookingRes.json();
+      record = Array.isArray(bookings) ? bookings[0] : null;
 
-    const justCancelled =
-      record?.status === "Cancelled" && oldRecord?.status !== "Cancelled" && payload.table === "bookings";
+      // Fast-fail if the booking was resolved before processing
+      if (!record || record.status !== "Pending" || record.payment_status !== "Pending") {
+        return new Response(JSON.stringify({ skipped: true, reason: "No longer pending" }), { status: 200 });
+      }
+    } else {
+      // 2b. Standard Database Webhook Routing
+      record = payload.record;
+      oldRecord = payload.old_record;
+    }
 
-    const justReminded =
-      record?.reminder_sent === true && oldRecord?.reminder_sent !== true && payload.table === "bookings";
-      
-    const justNotifiedSeatUpgrade =
-      record?.status === "notified" && oldRecord?.status !== "notified" && payload.table === "seat_upgrade_requests";
+    const justConfirmed = !isAbandonedSchedulerPayload && record?.status === "Confirmed" && oldRecord?.status !== "Confirmed" && payload.table === "bookings";
+    const justCancelled = !isAbandonedSchedulerPayload && record?.status === "Cancelled" && oldRecord?.status !== "Cancelled" && payload.table === "bookings";
+    const justReminded = !isAbandonedSchedulerPayload && record?.reminder_sent === true && oldRecord?.reminder_sent !== true && payload.table === "bookings";
+    const justNotifiedSeatUpgrade = !isAbandonedSchedulerPayload && record?.status === "notified" && oldRecord?.status !== "notified" && payload.table === "seat_upgrade_requests";
 
-    if (!justConfirmed && !justCancelled && !justReminded && !justNotifiedSeatUpgrade) {
+    if (!justConfirmed && !justCancelled && !justReminded && !justNotifiedSeatUpgrade && !isAbandonedSchedulerPayload) {
       return new Response(JSON.stringify({ skipped: true }), { status: 200 });
     }
 
@@ -167,17 +184,35 @@ serve(async (req) => {
         </ul>
         <p>Reply "Upgrade my booking" in the chat to claim this upgrade. Please note that availability is subject to change until you confirm.</p>
       `;
+    } else if (isAbandonedSchedulerPayload) {
+      const frontendUrl = Deno.env.get("FRONTEND_URL");
+      if (!frontendUrl) {
+        console.error("Configuration Error: FRONTEND_URL is missing in Edge Function environment. Omitting checkout CTA link from email.");
+      }
+      subject = "Your booking is still pending — complete your payment";
+      telegramMessage = `You have a pending booking!\n\n${eventLine}Your seats are still held! Please complete your payment before they are released.\n\nBooking ID: ${record.booking_id}\nCategory: ${record.category}\nSeats: ${record.seats_booked}`;
+      emailHtml = `
+        <h2>Complete your payment</h2>
+        <p>Hi ${user?.name || "there"},</p>
+        <p>You have a pending booking. Your seats are still held!</p>
+        <ul>
+          ${event ? `<li><strong>Event:</strong> ${event.artist_name}${event.venue_name ? ` @ ${event.venue_name}` : ""}</li>` : ""}
+          <li><strong>Booking ID:</strong> ${record.booking_id}</li>
+          <li><strong>Category:</strong> ${record.category}</li>
+          <li><strong>Seats:</strong> ${record.seats_booked}</li>
+        </ul>
+        <p>Please complete your payment before the seats are released.</p>
+        ${frontendUrl ? `<p><a href="${frontendUrl}/bookings" style="display:inline-block;padding:10px 20px;background:#007BFF;color:#fff;text-decoration:none;border-radius:5px;">Complete Payment</a></p>` : ""}
+      `;
     }
 
     const tasks: Promise<Response>[] = [];
 
-    // 4. Telegram notification - only when:
-    //    a) the booking itself was made via Telegram, OR
-    //    b) the user has explicitly opted in to also get Telegram
-    //       notifications for bookings made on the website.
+    // 4. Telegram notification - Generic Flow
     const shouldSendTelegram =
       !!user?.telegram_chat_id &&
-      (record.booking_source === "telegram" || user?.notify_telegram_for_website === true);
+      (record.booking_source === "telegram" || user?.notify_telegram_for_website === true) &&
+      !isAbandonedSchedulerPayload;
 
     if (shouldSendTelegram) {
       tasks.push(
@@ -192,31 +227,99 @@ serve(async (req) => {
       );
     }
 
-    // 5. Email notification via Gmail SMTP (only if we have an email on file)
-    if (user?.email) {
+    // 5. Email notification - Generic Flow
+    const shouldSendEmail = !!user?.email && !isAbandonedSchedulerPayload;
+
+    if (shouldSendEmail) {
       const client = new SMTPClient({
         connection: {
           hostname: "smtp.gmail.com",
           port: 465,
           tls: true,
-          auth: {
-            username: GMAIL_ADDRESS,
-            password: GMAIL_APP_PASSWORD,
-          },
+          auth: { username: GMAIL_ADDRESS, password: GMAIL_APP_PASSWORD },
         },
       });
 
       tasks.push(
-        client
-          .send({
-            from: GMAIL_ADDRESS,
-            to: user.email,
-            subject: subject,
-            html: emailHtml,
-          })
+        client.send({ from: GMAIL_ADDRESS, to: user.email, subject: subject, html: emailHtml })
           .then(() => client.close())
-          .then(() => new Response("ok")) // keep return type consistent with the Telegram fetch task
+          .then(() => new Response("ok"))
       );
+    }
+
+    // 6. Abandoned Checkout - Independent Idempotent Delivery
+    if (isAbandonedSchedulerPayload) {
+      const updateFlag = async (flag: string, val: boolean) => {
+        return fetch(`${SUPABASE_URL}/rest/v1/bookings?booking_id=eq.${record.booking_id}`, {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            "apikey": SUPABASE_SERVICE_ROLE_KEY,
+            "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+          },
+          body: JSON.stringify({ [flag]: val }),
+        });
+      };
+
+      const handleIndependentChannel = async (flag: string, hasContact: boolean, sendFn: () => Promise<any>) => {
+        if (!hasContact) {
+          // Permanently skip if missing contact info
+          await updateFlag(flag, true);
+          return;
+        }
+        
+        // Optimistic concurrency claim: only update if currently false
+        const claimRes = await fetch(`${SUPABASE_URL}/rest/v1/bookings?booking_id=eq.${record.booking_id}&${flag}=eq.false`, {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            "apikey": SUPABASE_SERVICE_ROLE_KEY,
+            "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+            "Prefer": "return=representation" // Return updated rows
+          },
+          body: JSON.stringify({ [flag]: true }),
+        });
+        
+        const claimedRows = await claimRes.json();
+        if (!Array.isArray(claimedRows) || claimedRows.length === 0) {
+          // Already sent or claimed by another concurrent execution
+          return;
+        }
+        
+        try {
+          await sendFn();
+        } catch (e) {
+          // Revert claim on failure to allow retry
+          await updateFlag(flag, false);
+          throw e;
+        }
+      };
+
+      if (!record.abandoned_telegram_sent) {
+        tasks.push(handleIndependentChannel("abandoned_telegram_sent", !!user?.telegram_chat_id, async () => {
+          const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: user.telegram_chat_id, text: telegramMessage }),
+          });
+          if (!res.ok) throw new Error("Telegram failed");
+        }));
+      }
+
+      if (!record.abandoned_email_sent) {
+        tasks.push(handleIndependentChannel("abandoned_email_sent", !!user?.email, async () => {
+          const client = new SMTPClient({
+            connection: {
+              hostname: "smtp.gmail.com",
+              port: 465,
+              tls: true,
+              auth: { username: GMAIL_ADDRESS, password: GMAIL_APP_PASSWORD },
+            },
+          });
+          await client.send({ from: GMAIL_ADDRESS, to: user.email, subject: subject, html: emailHtml });
+          await client.close();
+        }));
+      }
     }
 
     await Promise.allSettled(tasks);
