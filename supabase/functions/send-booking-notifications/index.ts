@@ -27,10 +27,18 @@ serve(async (req) => {
     let record;
     let oldRecord = null;
     let isAbandonedSchedulerPayload = false;
+    let isReminderSchedulerPayload = false;
+    let aiContent = "";
 
     // 2a. Explicit Scheduler Routing
     if (payload.type === "abandoned_checkout" && payload.booking_id) {
       isAbandonedSchedulerPayload = true;
+    } else if (payload.type === "event_reminder" && payload.booking_id) {
+      isReminderSchedulerPayload = true;
+      aiContent = payload.ai_content || "";
+    }
+
+    if (isAbandonedSchedulerPayload || isReminderSchedulerPayload) {
       const bookingRes = await fetch(
         `${SUPABASE_URL}/rest/v1/bookings?booking_id=eq.${payload.booking_id}&select=*`,
         {
@@ -43,9 +51,14 @@ serve(async (req) => {
       const bookings = await bookingRes.json();
       record = Array.isArray(bookings) ? bookings[0] : null;
 
-      // Fast-fail if the booking was resolved before processing
-      if (!record || record.status !== "Pending" || record.payment_status !== "Pending") {
-        return new Response(JSON.stringify({ skipped: true, reason: "No longer pending" }), { status: 200 });
+      if (isAbandonedSchedulerPayload) {
+        if (!record || record.status !== "Pending" || record.payment_status !== "Pending") {
+          return new Response(JSON.stringify({ skipped: true, reason: "No longer pending" }), { status: 200 });
+        }
+      } else if (isReminderSchedulerPayload) {
+        if (!record || record.status !== "Confirmed" || record.payment_status !== "Paid") {
+          return new Response(JSON.stringify({ skipped: true, reason: "Not confirmed or paid" }), { status: 200 });
+        }
       }
     } else {
       // 2b. Standard Database Webhook Routing
@@ -53,12 +66,12 @@ serve(async (req) => {
       oldRecord = payload.old_record;
     }
 
-    const justConfirmed = !isAbandonedSchedulerPayload && record?.status === "Confirmed" && oldRecord?.status !== "Confirmed" && payload.table === "bookings";
-    const justCancelled = !isAbandonedSchedulerPayload && record?.status === "Cancelled" && oldRecord?.status !== "Cancelled" && payload.table === "bookings";
-    const justReminded = !isAbandonedSchedulerPayload && record?.reminder_sent === true && oldRecord?.reminder_sent !== true && payload.table === "bookings";
-    const justNotifiedSeatUpgrade = !isAbandonedSchedulerPayload && record?.status === "notified" && oldRecord?.status !== "notified" && payload.table === "seat_upgrade_requests";
+    const justConfirmed = !isAbandonedSchedulerPayload && !isReminderSchedulerPayload && record?.status === "Confirmed" && oldRecord?.status !== "Confirmed" && payload.table === "bookings";
+    const justCancelled = !isAbandonedSchedulerPayload && !isReminderSchedulerPayload && record?.status === "Cancelled" && oldRecord?.status !== "Cancelled" && payload.table === "bookings";
+    const justReminded = !isAbandonedSchedulerPayload && !isReminderSchedulerPayload && record?.reminder_sent === true && oldRecord?.reminder_sent !== true && payload.table === "bookings";
+    const justNotifiedSeatUpgrade = !isAbandonedSchedulerPayload && !isReminderSchedulerPayload && record?.status === "notified" && oldRecord?.status !== "notified" && payload.table === "seat_upgrade_requests";
 
-    if (!justConfirmed && !justCancelled && !justReminded && !justNotifiedSeatUpgrade && !isAbandonedSchedulerPayload) {
+    if (!justConfirmed && !justCancelled && !justReminded && !justNotifiedSeatUpgrade && !isAbandonedSchedulerPayload && !isReminderSchedulerPayload) {
       return new Response(JSON.stringify({ skipped: true }), { status: 200 });
     }
 
@@ -204,6 +217,23 @@ serve(async (req) => {
         <p>Please complete your payment before the seats are released.</p>
         ${frontendUrl ? `<p><a href="${frontendUrl}/bookings" style="display:inline-block;padding:10px 20px;background:#007BFF;color:#fff;text-decoration:none;border-radius:5px;">Complete Payment</a></p>` : ""}
       `;
+    } else if (isReminderSchedulerPayload) {
+      subject = `Get ready for ${event?.artist_name} tomorrow!`;
+      telegramMessage = `Reminder: Your upcoming event is tomorrow!\n\n${eventLine}Booking ID: ${record.booking_id}\nCategory: ${record.category}\nSeats: ${record.seats_booked}\n\n${aiContent}`;
+      emailHtml = `
+        <h2>Event Reminder</h2>
+        <p>Hi ${user?.name || "there"},</p>
+        <p>This is a quick reminder that your event is coming up tomorrow! Details:</p>
+        <ul>
+          ${event ? `<li><strong>Event:</strong> ${event.artist_name}${event.venue_name ? ` @ ${event.venue_name}` : ""}</li>` : ""}
+          <li><strong>Booking ID:</strong> ${record.booking_id}</li>
+          <li><strong>Category:</strong> ${record.category}</li>
+          <li><strong>Seats:</strong> ${record.seats_booked}</li>
+        </ul>
+        <p><strong>Prep Guide:</strong></p>
+        <p>${aiContent.replace(/\n/g, "<br>")}</p>
+        <p>Get ready for an amazing experience! See you there.</p>
+      `;
     }
 
     const tasks: Promise<Response>[] = [];
@@ -212,7 +242,7 @@ serve(async (req) => {
     const shouldSendTelegram =
       !!user?.telegram_chat_id &&
       (record.booking_source === "telegram" || user?.notify_telegram_for_website === true) &&
-      !isAbandonedSchedulerPayload;
+      !isAbandonedSchedulerPayload && !isReminderSchedulerPayload;
 
     if (shouldSendTelegram) {
       tasks.push(
@@ -228,7 +258,7 @@ serve(async (req) => {
     }
 
     // 5. Email notification - Generic Flow
-    const shouldSendEmail = !!user?.email && !isAbandonedSchedulerPayload;
+    const shouldSendEmail = !!user?.email && !isAbandonedSchedulerPayload && !isReminderSchedulerPayload;
 
     if (shouldSendEmail) {
       const client = new SMTPClient({
@@ -319,6 +349,75 @@ serve(async (req) => {
           await client.send({ from: GMAIL_ADDRESS, to: user.email, subject: subject, html: emailHtml });
           await client.close();
         }));
+      }
+    }
+
+    // 7. Event Reminder Delivery & State
+    if (isReminderSchedulerPayload) {
+      // Concurrency claim with 30-minute stale recovery AND independent channel check
+      const thirtyMinsAgo = new Date(Date.now() - 30 * 60000).toISOString();
+      const claimRes = await fetch(`${SUPABASE_URL}/rest/v1/bookings?booking_id=eq.${record.booking_id}&and=(or(reminder_email_sent.eq.false,reminder_telegram_sent.eq.false),or(reminder_claimed_at.is.null,reminder_claimed_at.lt.${thirtyMinsAgo}))`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": SUPABASE_SERVICE_ROLE_KEY,
+          "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+          "Prefer": "return=representation"
+        },
+        body: JSON.stringify({ reminder_claimed_at: new Date().toISOString() }),
+      });
+      
+      const claimedRows = await claimRes.json();
+      if (!Array.isArray(claimedRows) || claimedRows.length === 0) {
+        return new Response(JSON.stringify({ skipped: true, reason: "Already sent or claimed by another process recently" }), { status: 200 });
+      }
+
+      const shouldSendTel = !!user?.telegram_chat_id && (record.booking_source === "telegram" || user?.notify_telegram_for_website === true);
+      const shouldSendEm = !!user?.email;
+
+      let telSucceeded = !shouldSendTel || record.reminder_telegram_sent;
+      let emSucceeded = !shouldSendEm || record.reminder_email_sent;
+
+      const updateFlag = async (flag: string, val: any) => {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/bookings?booking_id=eq.${record.booking_id}`, {
+          method: "PATCH", headers: { "Content-Type": "application/json", "apikey": SUPABASE_SERVICE_ROLE_KEY, "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` },
+          body: JSON.stringify({ [flag]: val }),
+        });
+        if (!res.ok) {
+          throw new Error(`Failed to update ${flag} to ${val}`);
+        }
+        return res;
+      };
+
+      if (shouldSendTel && !record.reminder_telegram_sent) {
+        try {
+          const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chat_id: user.telegram_chat_id, text: telegramMessage }),
+          });
+          if (!res.ok) throw new Error("Telegram failed");
+          await updateFlag("reminder_telegram_sent", true);
+          telSucceeded = true;
+        } catch (e) { console.error("Reminder Tel fail:", e); }
+      }
+
+      if (shouldSendEm && !record.reminder_email_sent) {
+        try {
+          const client = new SMTPClient({ connection: { hostname: "smtp.gmail.com", port: 465, tls: true, auth: { username: GMAIL_ADDRESS, password: GMAIL_APP_PASSWORD } } });
+          await client.send({ from: GMAIL_ADDRESS, to: user.email, subject: subject, html: emailHtml });
+          await client.close();
+          await updateFlag("reminder_email_sent", true);
+          emSucceeded = true;
+        } catch (e) { console.error("Reminder Email fail:", e); }
+      }
+
+      if (telSucceeded && emSucceeded) {
+        // Overall success: all eligible channels succeeded (or were already sent)
+        await updateFlag("reminder_sent", true);
+        return new Response(JSON.stringify({ success: true, finished: true }), { status: 200 });
+      } else {
+        // Release claim for retry on failures
+        await updateFlag("reminder_claimed_at", null);
+        return new Response(JSON.stringify({ error: "One or more channels failed" }), { status: 500 });
       }
     }
 
