@@ -5,11 +5,13 @@ import json
 from dotenv import load_dotenv
 from google import genai
 from pydantic import BaseModel
+from groq import Groq
 
 load_dotenv()
 
 from app.supabase_client import supabase_admin
 from app.config import GEMINI_API_KEY
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 class PricingRecommendation(BaseModel):
     suggested_price_inr: float
@@ -24,14 +26,59 @@ def parse_event_datetime(date_str: str, time_str: str) -> datetime:
         dt_naive = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
     return dt_naive.replace(tzinfo=ist_tz)
 
+def generate_recommendation(prompt: str) -> dict:
+    import time
+    # 1. Gemini
+    if GEMINI_API_KEY:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        print("Gemini attempt 1/1...")
+        try:
+            response = client.models.generate_content(
+                model='gemini-3.7-flash',
+                contents=prompt,
+                config={
+                    "response_mime_type": "application/json",
+                    "response_schema": PricingRecommendation,
+                    "temperature": 0.2
+                }
+            )
+            print("Gemini recommendation generated successfully.")
+            print("LLM provider: Gemini")
+            return json.loads(response.text)
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "503" in err_msg or "unavailable" in err_msg or "too many requests" in err_msg:
+                print(f"Gemini returned error: {e}")
+                print("Gemini unavailable. Skipping retries.")
+            else:
+                print(f"Gemini failed: {e}")
+
+    # 2. Groq fallback
+    if GROQ_API_KEY:
+        print("Switching to Groq fallback...")
+        groq_client = Groq(api_key=GROQ_API_KEY)
+        try:
+            groq_prompt = prompt + "\n\nRespond with ONLY a JSON object containing 'suggested_price_inr' (number) and 'justification' (string)."
+            response = groq_client.chat.completions.create(
+                model="openai/gpt-oss-20b",
+                messages=[{"role": "user", "content": groq_prompt}],
+                response_format={"type": "json_object"},
+                temperature=0.2
+            )
+            print("Groq recommendation generated successfully.")
+            print("LLM provider: Groq")
+            return json.loads(response.choices[0].message.content)
+        except Exception as e:
+            print(f"Groq fallback failed: {e}")
+            
+    return None
+
 async def main():
     print("Running Dynamic Pricing Suggestion Agent...")
     
-    if not GEMINI_API_KEY:
-        print("GEMINI_API_KEY is missing.")
+    if not GEMINI_API_KEY and not GROQ_API_KEY:
+        print("Both GEMINI_API_KEY and GROQ_API_KEY are missing.")
         return
-        
-    client = genai.Client(api_key=GEMINI_API_KEY)
     
     now = datetime.now(timezone.utc)
     target_start = now + timedelta(hours=72)
@@ -134,22 +181,17 @@ async def main():
                 IMPORTANT: The suggested price MUST be higher than the current price, must be a sensible whole number in INR, and cannot be negative.
                 """
                 
-                response = client.models.generate_content(
-                    model='gemini-3.6-flash',
-                    contents=prompt,
-                    config={
-                        "response_mime_type": "application/json",
-                        "response_schema": PricingRecommendation,
-                        "temperature": 0.2
-                    }
-                )
+                rec = generate_recommendation(prompt)
                 
+                if not rec:
+                    print(f"Failed to generate recommendation for {event_id}. Both providers failed.")
+                    continue
+                    
                 try:
-                    rec = json.loads(response.text)
                     new_price = float(rec["suggested_price_inr"])
                     justification = rec["justification"]
                 except Exception as e:
-                    print(f"Failed to parse Gemini response for {event_id}: {e}")
+                    print(f"Failed to parse LLM response for {event_id}: {e}")
                     continue
                 
                 # Fix #3: Server-side pricing guardrail
@@ -193,31 +235,26 @@ async def main():
                 admin_id = recent_admin["admin_user_id"]
                 session_id = recent_admin["session_id"]
                 
-                alert_message = (
-                    f"🚨 **System Alert: High Demand Pricing Suggestion** 🚨\n\n"
-                    f"The **{category}** category for **'{evt.get('artist_name')}'** (Event ID: {event_id}) is filling up fast!\n"
-                    f"- Capacity: {percent_full:.1f}% full\n"
-                    f"- Time remaining: {days_remaining} days\n"
-                    f"- Booking velocity: {velocity_seats} seats sold in the last 48 hours.\n\n"
-                    f"**AI Recommendation:** Increase price from ₹{price_inr} to **₹{new_price_int}**.\n"
-                    f"*Justification:* {justification}\n\n"
-                    f"Reply with **'Update {category} price to {new_price_int}'** to approve this change."
-                )
-                
                 try:
-                    insert_res = supabase_admin.table("admin_chat_history").insert({
+                    insert_res = supabase_admin.table("pricing_notifications").insert({
                         "admin_user_id": admin_id,
-                        "session_id": session_id,
-                        "role": "assistant",
-                        "message": alert_message
+                        "event_id": event_id,
+                        "category": category,
+                        "percent_full": float(percent_full),
+                        "remaining_seats": available_seats,
+                        "days_remaining": days_remaining,
+                        "velocity_seats": velocity_seats,
+                        "current_price": price_inr,
+                        "suggested_price": new_price_int,
+                        "justification": justification
                     }).execute()
                     
                     if not insert_res.data:
                         raise Exception("Empty response from database during insert.")
                         
-                    print(f"Successfully injected alert into admin session {session_id}.")
+                    print(f"Successfully created pricing notification for {category}.")
                 except Exception as e:
-                    print(f"Failed to inject alert into admin session {session_id}: {e}")
+                    print(f"Failed to create pricing notification for {category}: {e}")
                     # Revert the atomic claim so the next scheduled run can retry
                     revert_val = last_alert_at if last_alert_at else None
                     supabase_admin.table("ticket_categories").update({

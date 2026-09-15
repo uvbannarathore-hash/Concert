@@ -61,34 +61,80 @@ export default function AdminPage() {
   const [chatImage, setChatImage] = useState(null)
   const [chatSending, setChatSending] = useState(false)
 
+  // Multi-chat
+  const [activeSessionId, setActiveSessionId] = useState(() => {
+    return localStorage.getItem('active_admin_chat_session') || localStorage.getItem('user_id')
+  })
+  const [chatSessions, setChatSessions] = useState([])
+  
+  // Pricing Notifications
+  const [pricingNotifications, setPricingNotifications] = useState([])
+  const [showNotificationsModal, setShowNotificationsModal] = useState(false)
+
+
+  
+  // Load previous chat sessions for the sidebar
+  useEffect(() => {
+    async function loadSessions() {
+      const adminId = localStorage.getItem('user_id')
+      if (!adminId) return
+      
+      const { data } = await supabase
+        .from('admin_chat_history')
+        .select('session_id, role, message, created_at')
+        .eq('admin_user_id', adminId)
+        .order('created_at', { ascending: false })
+        
+      if (!data) return
+      
+      const sessionsMap = new Map()
+      data.forEach(row => {
+        if (!sessionsMap.has(row.session_id)) {
+          sessionsMap.set(row.session_id, {
+            sessionId: row.session_id,
+            latestTimestamp: row.created_at,
+            title: 'New Chat'
+          })
+        }
+        if (row.role === 'user') {
+          // the oldest user message becomes the title (by overwriting backwards)
+          sessionsMap.get(row.session_id).title = row.message.slice(0, 35) + (row.message.length > 35 ? '...' : '')
+        }
+      })
+      setChatSessions(Array.from(sessionsMap.values()))
+    }
+    loadSessions()
+  }, [])
+
+  // Chat messages and Realtime scoping
   useEffect(() => {
     let channel = null
     let isUnmounted = false
     
     async function initChat() {
-      const sessionId = localStorage.getItem('user_id')
-      if (isUnmounted || !sessionId) return
+      if (isUnmounted || !activeSessionId) return
       
       const { data } = await supabase
         .from('admin_chat_history')
         .select('*')
-        .eq('session_id', sessionId)
+        .eq('session_id', activeSessionId)
         .order('created_at', { ascending: true })
         
       if (isUnmounted) return
         
+      const welcomeMsg = { id: 'welcome', role: 'assistant', text: "Welcome to the backstage panel. I'm your AI Admin Assistant. I can create, update, or cancel events, edit ticket pricing, or summarize sales. Type below to get started, and feel free to upload poster images (📎) or map coordinates (📍)." }
+      
       if (data && data.length > 0) {
         const historyMsgs = data.map(row => ({ id: row.id, role: row.role, text: row.message }))
-        setChatMessages(prev => {
-          const welcome = prev.find(m => m.id === 'welcome') || prev[0]
-          return [welcome, ...historyMsgs]
-        })
+        setChatMessages([welcomeMsg, ...historyMsgs])
+      } else {
+        setChatMessages([welcomeMsg])
       }
       
-      channel = supabase.channel('admin_chat_inserts')
+      channel = supabase.channel(`admin_chat_${activeSessionId}`)
         .on(
           'postgres_changes',
-          { event: 'INSERT', schema: 'public', table: 'admin_chat_history', filter: `session_id=eq.${sessionId}` },
+          { event: 'INSERT', schema: 'public', table: 'admin_chat_history', filter: `session_id=eq.${activeSessionId}` },
           (payload) => {
             if (isUnmounted) return
             const newMsg = payload.new
@@ -105,10 +151,6 @@ export default function AdminPage() {
           }
         )
         .subscribe()
-        
-      if (isUnmounted) {
-        supabase.removeChannel(channel)
-      }
     }
     
     initChat()
@@ -117,7 +159,53 @@ export default function AdminPage() {
       isUnmounted = true
       if (channel) supabase.removeChannel(channel)
     }
+  }, [activeSessionId])
+  
+  // Pricing Notifications Data & Realtime
+  useEffect(() => {
+    let isUnmounted = false
+    
+    async function fetchNotifs() {
+      try {
+        const { notifications } = await adminApi.getPricingNotifications()
+        if (!isUnmounted && notifications) {
+          setPricingNotifications(notifications)
+        }
+      } catch (err) {
+        console.error('Failed to load notifications:', err)
+      }
+    }
+    fetchNotifs()
+    
+    const notifChannel = supabase.channel('pricing_notifs')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'pricing_notifications', filter: `admin_user_id=eq.${localStorage.getItem('user_id')}` },
+        (payload) => {
+          if (isUnmounted) return
+          if (payload.new.status === 'pending') {
+             setPricingNotifications(prev => [payload.new, ...prev])
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'pricing_notifications', filter: `admin_user_id=eq.${localStorage.getItem('user_id')}` },
+        (payload) => {
+          if (isUnmounted) return
+          if (payload.new.status !== 'pending') {
+             setPricingNotifications(prev => prev.filter(n => n.id !== payload.new.id))
+          }
+        }
+      )
+      .subscribe()
+      
+    return () => {
+      isUnmounted = true
+      supabase.removeChannel(notifChannel)
+    }
   }, [])
+
 
   const [showLocationPicker, setShowLocationPicker] = useState(false)
   const [venueLocation, setVenueLocation] = useState(null)
@@ -215,8 +303,14 @@ export default function AdminPage() {
     const locationToSend = venueLocation
 
     try {
-      const res = await adminApi.chat(text, imageToSend, locationToSend)
+      const res = await adminApi.chat(text, imageToSend, locationToSend, activeSessionId)
       setChatMessages((m) => [...m, { role: 'assistant', text: res.reply }])
+      setChatSessions(prev => {
+        if (!prev.find(s => s.sessionId === activeSessionId)) {
+           return [{ sessionId: activeSessionId, title: text.slice(0, 35), latestTimestamp: new Date().toISOString() }, ...prev]
+        }
+        return prev
+      })
     } catch (err) {
       if (err.message.includes('403')) setForbidden(true)
       setChatMessages((m) => [...m, { role: 'assistant', text: `Error: ${err.message}` }])
@@ -438,11 +532,125 @@ export default function AdminPage() {
 
   return (
     <div className="max-w-6xl mx-auto px-6 py-12 animate-fade-in-up">
-      <div className="mb-8">
-        <p className="eyebrow mb-1">Backstage control center</p>
-        <h1 className="font-display text-5xl tracking-wide uppercase text-paper">ADMIN PANEL</h1>
-        <p className="text-xs text-haze mt-1">Deploy listings, customize prices, and coordinate bookings</p>
+      <div className="mb-8 flex justify-between items-start">
+        <div>
+          <p className="eyebrow mb-1">Backstage control center</p>
+          <h1 className="font-display text-5xl tracking-wide uppercase text-paper">ADMIN PANEL</h1>
+          <p className="text-xs text-haze mt-1">Deploy listings, customize prices, and coordinate bookings</p>
+        </div>
+        
+        {/* Notification Bell */}
+        <div className="relative">
+          <button
+            onClick={() => setShowNotificationsModal(true)}
+            className="p-3 text-haze hover:text-paper hover:bg-white/[0.04] rounded-full transition relative border border-white/[0.04] bg-stage"
+          >
+            <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
+            </svg>
+            {pricingNotifications.length > 0 && (
+              <span className="absolute top-0 right-0 inline-flex items-center justify-center w-5 h-5 text-[10px] font-bold text-void bg-spot rounded-full -translate-y-1/4 translate-x-1/4">
+                {pricingNotifications.length}
+              </span>
+            )}
+          </button>
+        </div>
       </div>
+      
+      {/* Notifications Modal */}
+      {showNotificationsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-void/80 backdrop-blur-sm">
+          <div className="bg-stage border border-white/[0.06] rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="flex justify-between items-center p-5 border-b border-white/[0.04]">
+              <h3 className="font-display text-xl text-paper tracking-wider uppercase">Pricing Notifications</h3>
+              <button onClick={() => setShowNotificationsModal(false)} className="text-haze hover:text-paper text-2xl">&times;</button>
+            </div>
+            <div className="overflow-y-auto p-5 space-y-4">
+              {pricingNotifications.length === 0 && (
+                <p className="text-sm font-mono text-haze text-center py-8">No pending notifications.</p>
+              )}
+              {pricingNotifications.map(notif => (
+                <div key={notif.id} className="border border-white/[0.04] rounded-xl p-5 bg-white/[0.01]">
+                  <div className="flex justify-between items-start mb-3">
+                    <div>
+                      <span className="font-display tracking-wide text-paper text-lg">High Demand: {notif.category}</span>
+                      <p className="text-xs font-mono text-spot2 mt-1">Event ID: {notif.event_id}</p>
+                    </div>
+                    <span className="px-2.5 py-1 text-[10px] uppercase tracking-wide font-bold bg-yellow-500/10 text-yellow-500 rounded border border-yellow-500/20">Pending</span>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-3 text-xs font-mono text-haze mb-4">
+                    <div>Capacity: <span className="text-paper">{notif.percent_full}%</span></div>
+                    <div>Remaining: <span className="text-paper">{notif.remaining_seats} seats</span></div>
+                    <div>Velocity: <span className="text-paper">{notif.velocity_seats} in 48h</span></div>
+                    <div>Days to event: <span className="text-paper">{notif.days_remaining}</span></div>
+                  </div>
+                  
+                  <p className="text-sm text-haze/80 italic mb-5 border-l-2 border-spot2/50 pl-3">"{notif.justification}"</p>
+                  
+                  <div className="flex flex-wrap items-center gap-4 bg-white/[0.02] p-4 rounded-lg border border-white/[0.04]">
+                    <div>
+                      <div className="text-[10px] font-mono text-haze uppercase mb-1">Current Price</div>
+                      <div className="font-semibold text-paper">₹{notif.current_price}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] font-mono text-spot uppercase mb-1">AI Suggested</div>
+                      <div className="font-semibold text-spot">₹{notif.suggested_price}</div>
+                    </div>
+                    <div className="flex-1 min-w-[120px]">
+                      <div className="text-[10px] font-mono text-haze uppercase mb-1">Final Price</div>
+                      <input 
+                        type="number"
+                        id={`price_${notif.id}`}
+                        defaultValue={notif.suggested_price}
+                        className="w-full bg-void border border-white/[0.06] rounded px-3 py-1.5 text-paper text-sm focus:border-spot focus:ring-1 focus:ring-spot"
+                      />
+                    </div>
+                  </div>
+                  
+                  <div className="mt-5 flex justify-end gap-3">
+                    <button 
+                      onClick={async () => {
+                        try {
+                          await adminApi.resolvePricingNotification(notif.id, 'dismiss')
+                          setPricingNotifications(prev => prev.filter(n => n.id !== notif.id))
+                        } catch (err) {
+                          alert('Failed to dismiss: ' + err.message)
+                        }
+                      }}
+                      className="px-4 py-2 border border-white/[0.1] text-haze rounded text-xs font-mono uppercase hover:text-paper hover:bg-white/[0.05] transition"
+                    >
+                      Dismiss
+                    </button>
+                    <button 
+                      onClick={async () => {
+                        const val = parseInt(document.getElementById(`price_${notif.id}`).value)
+                        if (isNaN(val) || val <= 0) return alert("Valid positive price required.")
+                        
+                        if (val > notif.current_price * 1.5) {
+                          if (!window.confirm(`Warning: ₹${val} is more than 50% higher than the current price (₹${notif.current_price}). Proceed?`)) {
+                            return
+                          }
+                        }
+                        
+                        try {
+                          await adminApi.resolvePricingNotification(notif.id, 'approve', val)
+                          setPricingNotifications(prev => prev.filter(n => n.id !== notif.id))
+                        } catch (err) {
+                          alert('Failed to approve: ' + err.message)
+                        }
+                      }}
+                      className="px-4 py-2 bg-spot text-void rounded text-xs font-mono uppercase font-bold hover:brightness-110 transition"
+                    >
+                      Apply Price
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="grid md:grid-cols-12 gap-8 items-start">
         
@@ -492,8 +700,48 @@ export default function AdminPage() {
 
           {/* 1. AI Assistant Panel */}
           {tab === 'assistant' && (
-            <div className="bg-stage/20 border border-white/[0.04] rounded-2xl p-5 flex flex-col h-[55vh] shadow-2xl relative">
-              <div className="flex-1 overflow-y-auto space-y-4 pr-1 mb-4 scrollbar-none">
+            <div className="bg-stage/20 border border-white/[0.04] rounded-2xl flex h-[55vh] shadow-2xl relative overflow-hidden">
+              
+              {/* Sidebar */}
+              <div className="w-1/3 border-r border-white/[0.04] bg-white/[0.01] flex flex-col hidden sm:flex">
+                <div className="p-4 border-b border-white/[0.04]">
+                  <button
+                    onClick={() => {
+                      const newId = crypto.randomUUID()
+                      setActiveSessionId(newId)
+                      localStorage.setItem('active_admin_chat_session', newId)
+                    }}
+                    className="w-full py-2.5 bg-white/[0.05] border border-white/[0.1] text-paper rounded text-xs font-mono uppercase tracking-wider hover:bg-white/[0.1] hover:text-white transition font-semibold flex items-center justify-center gap-2"
+                  >
+                    <span>+</span> New Chat
+                  </button>
+                </div>
+                <div className="flex-1 overflow-y-auto p-2 space-y-1 scrollbar-none">
+                  {chatSessions.length === 0 && (
+                    <div className="text-xs font-mono text-haze/50 text-center mt-6">No previous chats yet.</div>
+                  )}
+                  {chatSessions.map(sess => (
+                    <button
+                      key={sess.sessionId}
+                      onClick={() => {
+                        setActiveSessionId(sess.sessionId)
+                        localStorage.setItem('active_admin_chat_session', sess.sessionId)
+                      }}
+                      className={`w-full text-left p-3 rounded-lg text-sm truncate transition border flex flex-col gap-1 ${
+                        activeSessionId === sess.sessionId 
+                          ? 'bg-spot/10 border-spot/30 text-spot font-semibold' 
+                          : 'border-transparent text-haze hover:bg-white/[0.03] hover:text-paper'
+                      }`}
+                    >
+                      <span className="truncate w-full">{sess.title || 'New Chat'}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Chat View */}
+              <div className="flex-1 flex flex-col h-full relative">
+                <div className="flex-1 overflow-y-auto space-y-4 p-5 scrollbar-none">
                 {chatMessages.map((m, i) => {
                   const isUser = m.role === 'user'
                   return (
@@ -532,87 +780,91 @@ export default function AdminPage() {
                 )}
               </div>
 
-              {/* Autocomplete Input or Tags */}
-              <div className="flex flex-wrap gap-2 mb-3">
-                {chatImage && (
-                  <span className="flex items-center gap-1.5 text-[10px] font-mono text-spot bg-spot/5 border border-spot/15 px-2.5 py-1 rounded-md">
-                    <Paperclip className="w-3 h-3 text-spot" /> {chatImage.name}
-                    <button type="button" onClick={() => setChatImage(null)} className="text-[9px] hover:text-white font-bold">✕</button>
-                  </span>
-                )}
-                {venueLocation && (
-                  <span className="flex items-center gap-1.5 text-[10px] font-mono text-spot2 bg-spot2/5 border border-spot2/15 px-2.5 py-1 rounded-md">
-                    <MapPin className="w-3 h-3 text-spot2" /> {venueLocation.name || venueLocation.address.split(',')[0]}
-                    <button type="button" onClick={() => setVenueLocation(null)} className="text-[9px] hover:text-white font-bold">✕</button>
-                  </span>
-                )}
-              </div>
-
-              {showLocationPicker && (
-                <div className="mb-3 relative animate-scale-in">
-                  <input
-                    className="field !py-2.5 text-xs font-mono"
-                    value={locationQuery}
-                    onChange={(e) => setLocationQuery(e.target.value)}
-                    placeholder="Search venue (e.g. DY Patil Stadium Mumbai)..."
-                    autoFocus
-                  />
-                  {locationSearching && <p className="text-[10px] font-mono text-haze mt-1 px-2">Searching Nominatim geocoding index...</p>}
-                  {locationResults.length > 0 && (
-                    <div className="absolute z-30 w-full mt-1 bg-stage border border-white/[0.06] rounded-xl overflow-hidden shadow-2xl">
-                      {locationResults.map((place, i) => (
-                        <button
-                          key={i}
-                          type="button"
-                          onClick={() => selectLocationResult(place)}
-                          className="block w-full text-left px-4 py-2 text-xs text-paper hover:bg-spot hover:text-void transition duration-150 truncate border-b border-white/[0.02]"
-                        >
-                          {place.display_name}
-                        </button>
-                      ))}
-                    </div>
+              {/* Chat Input Area */}
+              <div className="p-5 bg-stage/40 border-t border-white/[0.04]">
+                {/* Autocomplete Input or Tags */}
+                <div className="flex flex-wrap gap-2 mb-3">
+                  {chatImage && (
+                    <span className="flex items-center gap-1.5 text-[10px] font-mono text-spot bg-spot/5 border border-spot/15 px-2.5 py-1 rounded-md">
+                      <Paperclip className="w-3 h-3 text-spot" /> {chatImage.name}
+                      <button type="button" onClick={() => setChatImage(null)} className="text-[9px] hover:text-white font-bold">✕</button>
+                    </span>
+                  )}
+                  {venueLocation && (
+                    <span className="flex items-center gap-1.5 text-[10px] font-mono text-spot2 bg-spot2/5 border border-spot2/15 px-2.5 py-1 rounded-md">
+                      <MapPin className="w-3 h-3 text-spot2" /> {venueLocation.name || venueLocation.address.split(',')[0]}
+                      <button type="button" onClick={() => setVenueLocation(null)} className="text-[9px] hover:text-white font-bold">✕</button>
+                    </span>
                   )}
                 </div>
-              )}
 
-              {/* Chat action form */}
-              <form onSubmit={handleAdminChatSend} className="flex gap-2 border-t border-white/[0.04] pt-4 flex-shrink-0">
-                <input
-                  className="field text-sm"
-                  value={chatInput}
-                  onChange={(e) => setChatInput(e.target.value)}
-                  placeholder="e.g. 'Create a Diljit concert in Pune on Dec 20, 8 PM'"
-                  disabled={chatSending}
-                />
-                
-                {/* File Upload button wrapper */}
-                <label className="btn-ghost !px-3 cursor-pointer flex items-center justify-center text-sm shadow-md" title="Attach flyers/poster image">
-                  <Paperclip className="w-4 h-4 text-haze hover:text-paper" />
+                {showLocationPicker && (
+                  <div className="mb-3 relative animate-scale-in">
+                    <input
+                      className="field !py-2.5 text-xs font-mono"
+                      value={locationQuery}
+                      onChange={(e) => setLocationQuery(e.target.value)}
+                      placeholder="Search venue (e.g. DY Patil Stadium Mumbai)..."
+                      autoFocus
+                    />
+                    {locationSearching && <p className="text-[10px] font-mono text-haze mt-1 px-2">Searching Nominatim geocoding index...</p>}
+                    {locationResults.length > 0 && (
+                      <div className="absolute z-30 w-full mt-1 bg-stage border border-white/[0.06] rounded-xl overflow-hidden shadow-2xl">
+                        {locationResults.map((place, i) => (
+                          <button
+                            key={i}
+                            type="button"
+                            onClick={() => selectLocationResult(place)}
+                            className="block w-full text-left px-4 py-2 text-xs text-paper hover:bg-spot hover:text-void transition duration-150 truncate border-b border-white/[0.02]"
+                          >
+                            {place.display_name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Chat action form */}
+                <form onSubmit={handleAdminChatSend} className="flex gap-2">
                   <input
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
+                    className="field text-sm"
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    placeholder="e.g. 'Create a Diljit concert in Pune on Dec 20, 8 PM'"
                     disabled={chatSending}
-                    onChange={(e) => setChatImage(e.target.files[0] || null)}
                   />
-                </label>
+                  
+                  {/* File Upload button wrapper */}
+                  <label className="btn-ghost !px-3 cursor-pointer flex items-center justify-center text-sm shadow-md" title="Attach flyers/poster image">
+                    <Paperclip className="w-4 h-4 text-haze hover:text-paper" />
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      disabled={chatSending}
+                      onChange={(e) => setChatImage(e.target.files[0] || null)}
+                    />
+                  </label>
 
-                {/* Pin location button */}
-                <button
-                  type="button"
-                  onClick={() => setShowLocationPicker((s) => !s)}
-                  className="btn-ghost !px-3 flex items-center justify-center text-sm shadow-md"
-                  disabled={chatSending}
-                  title="Search & attach geocoding coordinates"
-                >
-                  <MapPin className="w-4 h-4 text-haze hover:text-paper" />
-                </button>
+                  {/* Pin location button */}
+                  <button
+                    type="button"
+                    onClick={() => setShowLocationPicker((s) => !s)}
+                    className="btn-ghost !px-3 flex items-center justify-center text-sm shadow-md"
+                    disabled={chatSending}
+                    title="Search & attach geocoding coordinates"
+                  >
+                    <MapPin className="w-4 h-4 text-haze hover:text-paper" />
+                  </button>
 
-                <button type="submit" disabled={chatSending || !chatInput.trim()} className="btn-spot !px-6 text-sm font-bold disabled:opacity-40">
-                  Send
-                </button>
-              </form>
+                  <button type="submit" disabled={chatSending} className="btn-primary !px-5 shadow-lg shadow-spot/20">
+                    Send
+                  </button>
+                </form>
+              </div>
             </div>
+          </div>
           )}
 
           {/* 2. Setup Events Form Panel */}

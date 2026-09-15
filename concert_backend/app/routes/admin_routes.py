@@ -2,6 +2,7 @@ import time
 import uuid
 import hashlib
 import logging
+from datetime import datetime
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from typing import Optional, Dict
@@ -600,3 +601,68 @@ async def upload_venue_image(venue_id: str, image: UploadFile = File(...), admin
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Image upload failed: {e}")
+
+# ---------- Pricing Notifications ----------
+
+class ResolveNotificationRequest(BaseModel):
+    action: str  # "approve" or "dismiss"
+    final_price: Optional[int] = None
+
+@router.get("/pricing-notifications")
+def get_pricing_notifications(admin=Depends(get_current_admin)):
+    admin_id = admin["user_id"]
+    result = supabase_admin.table("pricing_notifications").select("*").eq("admin_user_id", admin_id).eq("status", "pending").order("created_at", desc=True).execute()
+    return {"notifications": result.data}
+
+@router.patch("/pricing-notifications/{notification_id}")
+def resolve_pricing_notification(notification_id: str, payload: ResolveNotificationRequest, admin=Depends(get_current_admin)):
+    admin_id = admin["user_id"]
+    
+    # 1. Fetch notification
+    notif_res = supabase_admin.table("pricing_notifications").select("*").eq("id", notification_id).execute()
+    if not notif_res.data:
+        raise HTTPException(status_code=404, detail="Notification not found")
+        
+    notif = notif_res.data[0]
+    
+    # 2. Verify ownership
+    if notif["admin_user_id"] != admin_id:
+        raise HTTPException(status_code=403, detail="Not authorized to resolve this notification")
+        
+    # 3. Verify status
+    if notif["status"] != "pending":
+        raise HTTPException(status_code=400, detail=f"Notification already {notif['status']}")
+        
+    # 4. Handle Dismiss
+    if payload.action == "dismiss":
+        upd = supabase_admin.table("pricing_notifications").update({
+            "status": "dismissed",
+            "acted_at": datetime.utcnow().isoformat()
+        }).eq("id", notification_id).execute()
+        return {"message": "Notification dismissed", "notification": upd.data[0]}
+        
+    # 5. Handle Approve
+    if payload.action == "approve":
+        if payload.final_price is None or payload.final_price <= 0:
+            raise HTTPException(status_code=400, detail="Valid positive final_price required for approval")
+            
+        # Verify event/category
+        cat_res = supabase_admin.table("ticket_categories").select("*").eq("event_id", notif["event_id"]).eq("category", notif["category"]).execute()
+        if not cat_res.data:
+            raise HTTPException(status_code=404, detail="Ticket category not found")
+            
+        # Update ticket price (only price_inr changes)
+        supabase_admin.table("ticket_categories").update({
+            "price_inr": payload.final_price
+        }).eq("event_id", notif["event_id"]).eq("category", notif["category"]).execute()
+        
+        # Update notification
+        upd = supabase_admin.table("pricing_notifications").update({
+            "status": "approved",
+            "final_price": payload.final_price,
+            "acted_at": datetime.utcnow().isoformat()
+        }).eq("id", notification_id).execute()
+        
+        return {"message": "Price updated successfully", "notification": upd.data[0]}
+        
+    raise HTTPException(status_code=400, detail="Invalid action")

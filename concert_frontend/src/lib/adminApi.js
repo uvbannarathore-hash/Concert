@@ -39,7 +39,7 @@ export const adminApi = {
   // Chat now supports an optional image file (e.g. event poster) AND an
   // optional venue location (lat/lng) picked via Google Places Autocomplete.
   // Uses multipart/form-data since it may carry a binary file.
-  chat: async (message, imageFile, venueLocation) => {
+  chat: async (message, imageFile, venueLocation, sessionId) => {
     const token = localStorage.getItem('access_token')
     if (!token) throw new Error('Not logged in')
 
@@ -49,6 +49,9 @@ export const adminApi = {
     if (venueLocation) {
       formData.append('latitude', venueLocation.latitude)
       formData.append('longitude', venueLocation.longitude)
+    }
+    if (sessionId) {
+      formData.append('session_id', sessionId)
     }
 
     const res = await fetch(`${BASE_URL}/admin/agent-chat`, {
@@ -98,4 +101,12 @@ export const adminApi = {
   getAnalyticsBookings: () => adminRequest('/admin/analytics/bookings'),
   getTopEvents: () => adminRequest('/admin/analytics/top-events'),
   getCategorySales: () => adminRequest('/admin/analytics/category-sales'),
+
+  // Pricing Notifications
+  getPricingNotifications: () => adminRequest('/admin/pricing-notifications'),
+  resolvePricingNotification: (notificationId, action, finalPrice) =>
+    adminRequest(`/admin/pricing-notifications/${notificationId}`, {
+      method: 'PATCH',
+      body: { action, final_price: finalPrice }
+    }),
 }
