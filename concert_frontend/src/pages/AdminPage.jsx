@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { adminApi } from '../lib/adminApi'
 import { api } from '../lib/api'
+import { supabase } from '../lib/supabaseClient'
 import { Bot, BarChart3, Calendar, Ticket, Receipt, Tag, Inbox, Armchair, Mic, Building2, MapPin, Paperclip, Settings } from 'lucide-react'
 import AnalyticsDashboard from '../components/AnalyticsDashboard'
 
@@ -54,11 +55,69 @@ export default function AdminPage() {
   const [pastEventsLoading, setPastEventsLoading] = useState(false)
 
   const [chatMessages, setChatMessages] = useState([
-    { role: 'assistant', text: "Welcome to the backstage panel. I'm your AI Admin Assistant. I can create, update, or cancel events, edit ticket pricing, or summarize sales. Type below to get started, and feel free to upload poster images (📎) or map coordinates (📍)." },
+    { id: 'welcome', role: 'assistant', text: "Welcome to the backstage panel. I'm your AI Admin Assistant. I can create, update, or cancel events, edit ticket pricing, or summarize sales. Type below to get started, and feel free to upload poster images (📎) or map coordinates (📍)." },
   ])
   const [chatInput, setChatInput] = useState('')
   const [chatImage, setChatImage] = useState(null)
   const [chatSending, setChatSending] = useState(false)
+
+  useEffect(() => {
+    let channel = null
+    let isUnmounted = false
+    
+    async function initChat() {
+      const sessionId = localStorage.getItem('user_id')
+      if (isUnmounted || !sessionId) return
+      
+      const { data } = await supabase
+        .from('admin_chat_history')
+        .select('*')
+        .eq('session_id', sessionId)
+        .order('created_at', { ascending: true })
+        
+      if (isUnmounted) return
+        
+      if (data && data.length > 0) {
+        const historyMsgs = data.map(row => ({ id: row.id, role: row.role, text: row.message }))
+        setChatMessages(prev => {
+          const welcome = prev.find(m => m.id === 'welcome') || prev[0]
+          return [welcome, ...historyMsgs]
+        })
+      }
+      
+      channel = supabase.channel('admin_chat_inserts')
+        .on(
+          'postgres_changes',
+          { event: 'INSERT', schema: 'public', table: 'admin_chat_history', filter: `session_id=eq.${sessionId}` },
+          (payload) => {
+            if (isUnmounted) return
+            const newMsg = payload.new
+            setChatMessages(prev => {
+              if (prev.some(m => m.id === newMsg.id)) return prev
+              const optIndex = prev.findIndex(m => !m.id && m.role === newMsg.role && m.text === newMsg.message)
+              if (optIndex !== -1) {
+                const copy = [...prev]
+                copy[optIndex] = { ...copy[optIndex], id: newMsg.id }
+                return copy
+              }
+              return [...prev, { id: newMsg.id, role: newMsg.role, text: newMsg.message }]
+            })
+          }
+        )
+        .subscribe()
+        
+      if (isUnmounted) {
+        supabase.removeChannel(channel)
+      }
+    }
+    
+    initChat()
+    
+    return () => {
+      isUnmounted = true
+      if (channel) supabase.removeChannel(channel)
+    }
+  }, [])
 
   const [showLocationPicker, setShowLocationPicker] = useState(false)
   const [venueLocation, setVenueLocation] = useState(null)

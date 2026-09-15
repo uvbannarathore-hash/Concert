@@ -1,11 +1,7 @@
-import { api } from './api'
+import { api, BASE_URL } from './api'
 
 // Re-uses the same request/auth pattern as api.js, just for /admin/* routes.
 // Kept separate so normal users never even load admin logic.
-
-// Same env-based URL as api.js — set VITE_API_URL in production.
-const envUrl = import.meta.env.VITE_API_URL
-const BASE_URL = (envUrl && envUrl.trim()) ? envUrl.trim().replace(/\/+$/, '') : 'http://127.0.0.1:8000'
 
 async function adminRequest(path, { method = 'GET', body } = {}) {
   const token = localStorage.getItem('access_token')

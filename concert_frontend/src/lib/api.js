@@ -17,7 +17,7 @@ const getBaseUrl = () => {
   }
   return (envUrl && envUrl.trim()) ? envUrl.trim().replace(/\/+$/, '') : 'http://127.0.0.1:8000'
 }
-const BASE_URL = getBaseUrl()
+export const BASE_URL = getBaseUrl()
 
 function getToken() {
   return localStorage.getItem('access_token')
