@@ -8,10 +8,25 @@ from app.routes import artist_routes
 from app.limiter import limiter
 from app.routes import auth_routes, chat_routes, concert_routes, booking_routes, admin_routes, wishlist_routes, voice_routes, telegram_routes, show_routes, coupon_routes, venue_routes, review_routes, analytics_routes, waitlist_routes, ai_routes, group_routes
 from app.config import EXTRA_CORS_ORIGINS
+import uuid
+from app.logger import request_id_var
+
 app = FastAPI(title="Concert Booking Assistant API")
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    request_id = str(uuid.uuid4())
+    token = request_id_var.set(request_id)
+    try:
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+    finally:
+        request_id_var.reset(token)
+
 
 
 @app.exception_handler(RequestValidationError)

@@ -21,6 +21,7 @@ Tool handler functions can be either sync or async - both are supported.
 
 import inspect
 import logging
+import time
 
 from google import genai
 from google.genai import types
@@ -88,12 +89,18 @@ async def run_agent(
         for attempt in range(max_503_retries + 1):
             try:
                 rough_char_count = len(str(contents))
-                logger.info(f"Gemini API request: Iteration {_}, Context size roughly {rough_char_count} chars")
                 
+                start_time = time.perf_counter()
                 response = _client.models.generate_content(
                     model=MODEL_NAME,
                     contents=contents,
                     config=config,
+                )
+                llm_latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
+                
+                logger.info(
+                    f"Gemini API request: Iteration {_}, Context size roughly {rough_char_count} chars", 
+                    extra={"extra_data": {"llm_latency_ms": llm_latency_ms, "input_chars": rough_char_count, "model": MODEL_NAME}}
                 )
                 break
             except Exception as e:
@@ -143,13 +150,26 @@ async def run_agent(
                 result = {"error": f"Unknown tool: {fc.name}"}
             else:
                 try:
-                    logger.info(f"Executing tool {fc.name} args={args}")
+                    # Redact sensitive arguments before logging
+                    safe_args = {}
+                    for k, v in args.items():
+                        if k.lower() in ("password", "token", "email", "phone", "jwt", "authorization", "secret", "card", "cvv"):
+                            safe_args[k] = "***REDACTED***"
+                        else:
+                            safe_args[k] = v
+                    logger.info(f"Executing tool {fc.name}", extra={"extra_data": {"tool_name": fc.name, "tool_args": safe_args}})
+                    
+                    tool_start = time.perf_counter()
                     if inspect.iscoroutinefunction(handler):
                         result = await handler(**args)
                     else:
                         result = handler(**args)
+                    tool_latency_ms = round((time.perf_counter() - tool_start) * 1000, 2)
+                    
+                    logger.info(f"Tool {fc.name} completed", extra={"extra_data": {"tool_name": fc.name, "tool_latency_ms": tool_latency_ms}})
                 except Exception as e:
-                    logger.exception(f"Tool {fc.name} raised an error")
+                    tool_latency_ms = round((time.perf_counter() - tool_start) * 1000, 2) if 'tool_start' in locals() else 0
+                    logger.exception(f"Tool {fc.name} raised an error", extra={"extra_data": {"tool_name": fc.name, "tool_latency_ms": tool_latency_ms}})
                     result = {"error": str(e)}
                 # Record the successful (or attempted) call to prevent duplicates
                 executed_calls.add(call_signature)

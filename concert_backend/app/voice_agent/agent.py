@@ -15,8 +15,11 @@ Preserved from the original implementation:
 
 import asyncio
 import logging
+import os
 from datetime import datetime
 from typing import Any
+
+from app.logger import session_id_var
 
 from livekit.agents import (
     Agent,
@@ -532,13 +535,17 @@ async def _identify_participant(ctx: JobContext):
 
 
 async def entrypoint(ctx: JobContext):
+    # Connect as early as possible.
+    await ctx.connect()
+    
+    # Tie the session to the LiveKit room name for observability
+    session_id_var.set(ctx.room.name)
+    
     logger.info(
         "Incoming call/website connection request. Job ID: %s",
         ctx.job.id,
     )
 
-    # Connect as early as possible.
-    await ctx.connect()
     logger.info("Connected to LiveKit room: %s", ctx.room.name)
 
     _, participant_type, participant_identity = await _identify_participant(ctx)
