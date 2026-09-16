@@ -28,6 +28,8 @@ serve(async (req) => {
     let oldRecord = null;
     let isAbandonedSchedulerPayload = false;
     let isReminderSchedulerPayload = false;
+    let isGroupInvitePayload = false;
+    let isGenericNotification = false;
     let aiContent = "";
 
     // 2a. Explicit Scheduler Routing
@@ -36,6 +38,10 @@ serve(async (req) => {
     } else if (payload.type === "event_reminder" && payload.booking_id) {
       isReminderSchedulerPayload = true;
       aiContent = payload.ai_content || "";
+    } else if (payload.type === "group_invite") {
+      isGroupInvitePayload = true;
+    } else if (payload.type === "generic") {
+      isGenericNotification = true;
     }
 
     if (isAbandonedSchedulerPayload || isReminderSchedulerPayload) {
@@ -69,38 +75,49 @@ serve(async (req) => {
     const justConfirmed = !isAbandonedSchedulerPayload && !isReminderSchedulerPayload && record?.status === "Confirmed" && oldRecord?.status !== "Confirmed" && payload.table === "bookings";
     const justCancelled = !isAbandonedSchedulerPayload && !isReminderSchedulerPayload && record?.status === "Cancelled" && oldRecord?.status !== "Cancelled" && payload.table === "bookings";
     const justReminded = !isAbandonedSchedulerPayload && !isReminderSchedulerPayload && record?.reminder_sent === true && oldRecord?.reminder_sent !== true && payload.table === "bookings";
-    const justNotifiedSeatUpgrade = !isAbandonedSchedulerPayload && !isReminderSchedulerPayload && record?.status === "notified" && oldRecord?.status !== "notified" && payload.table === "seat_upgrade_requests";
+    const justNotifiedSeatUpgrade = !isAbandonedSchedulerPayload && !isReminderSchedulerPayload && !isGroupInvitePayload && !isGenericNotification && record?.status === "notified" && oldRecord?.status !== "notified" && payload.table === "seat_upgrade_requests";
 
-    if (!justConfirmed && !justCancelled && !justReminded && !justNotifiedSeatUpgrade && !isAbandonedSchedulerPayload && !isReminderSchedulerPayload) {
+    if (!justConfirmed && !justCancelled && !justReminded && !justNotifiedSeatUpgrade && !isAbandonedSchedulerPayload && !isReminderSchedulerPayload && !isGroupInvitePayload && !isGenericNotification) {
       return new Response(JSON.stringify({ skipped: true }), { status: 200 });
     }
 
-    // 3. Look up the user (chat_id, email, telegram preference) using the
-    //    service role key (server-side only, never exposed to the browser).
-    const userRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/users?user_id=eq.${record.user_id}&select=telegram_chat_id,email,name,notify_telegram_for_website`,
-      {
-        headers: {
-          apikey: SUPABASE_SERVICE_ROLE_KEY,
-          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-        },
-      }
-    );
-    const users = await userRes.json();
-    const user = Array.isArray(users) ? users[0] : null;
+    let user = null;
+    let event = null;
 
-    // 3b. Look up event details (bookings only stores event_id, not the name)
-    const eventRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/events?event_id=eq.${record.event_id}&select=artist_name,venue_name,event_date,event_time`,
-      {
-        headers: {
-          apikey: SUPABASE_SERVICE_ROLE_KEY,
-          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-        },
-      }
-    );
-    const events = await eventRes.json();
-    const event = Array.isArray(events) ? events[0] : null;
+    if (isGroupInvitePayload) {
+      user = { email: payload.friend_email };
+    } else if (isGenericNotification) {
+      user = { email: payload.email, telegram_chat_id: payload.telegram_chat_id };
+    } else if (record?.user_id) {
+      // 3. Look up the user (chat_id, email, telegram preference) using the
+      //    service role key (server-side only, never exposed to the browser).
+      const userRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/users?user_id=eq.${record.user_id}&select=telegram_chat_id,email,name,notify_telegram_for_website`,
+        {
+          headers: {
+            apikey: SUPABASE_SERVICE_ROLE_KEY,
+            Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+          },
+        }
+      );
+      const users = await userRes.json();
+      user = Array.isArray(users) ? users[0] : null;
+    }
+
+    if (!isGroupInvitePayload && record?.event_id) {
+      // 3b. Look up event details (bookings only stores event_id, not the name)
+      const eventRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/events?event_id=eq.${record.event_id}&select=artist_name,venue_name,event_date,event_time`,
+        {
+          headers: {
+            apikey: SUPABASE_SERVICE_ROLE_KEY,
+            Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+          },
+        }
+      );
+      const events = await eventRes.json();
+      event = Array.isArray(events) ? events[0] : null;
+    }
 
     const eventLine = event
       ? `Event: ${event.artist_name}${event.venue_name ? ` @ ${event.venue_name}` : ""}${event.event_date ? ` on ${event.event_date}` : ""}\n`
@@ -234,6 +251,23 @@ serve(async (req) => {
         <p>${aiContent.replace(/\n/g, "<br>")}</p>
         <p>Get ready for an amazing experience! See you there.</p>
       `;
+    } else if (isGroupInvitePayload) {
+      const frontendUrl = Deno.env.get("FRONTEND_URL") || "http://localhost:5173";
+      subject = `${payload.initiator_name} invited you to ${payload.event_name}!`;
+      emailHtml = `
+        <h2>You're Invited!</h2>
+        <p>Hi there,</p>
+        <p><strong>${payload.initiator_name}</strong> has invited you to go see <strong>${payload.event_name}</strong>!</p>
+        <p>Click the link below to view the event details and RSVP.</p>
+        <p><a href="${frontendUrl}/group-invite/${payload.invite_id}" style="display:inline-block;padding:10px 20px;background:#007BFF;color:#fff;text-decoration:none;border-radius:5px;">View Invitation</a></p>
+      `;
+    } else if (isGenericNotification) {
+      subject = payload.subject || "Important Notification";
+      emailHtml = `
+        <h2>Notification</h2>
+        <p>${payload.message?.replace(/\n/g, "<br>") || "You have a new message."}</p>
+      `;
+      telegramMessage = payload.message || "You have a new message.";
     }
 
     const tasks: Promise<Response>[] = [];
@@ -241,7 +275,7 @@ serve(async (req) => {
     // 4. Telegram notification - Generic Flow
     const shouldSendTelegram =
       !!user?.telegram_chat_id &&
-      (record.booking_source === "telegram" || user?.notify_telegram_for_website === true) &&
+      (isGenericNotification || (!isGroupInvitePayload && (record?.booking_source === "telegram" || user?.notify_telegram_for_website === true))) &&
       !isAbandonedSchedulerPayload && !isReminderSchedulerPayload;
 
     if (shouldSendTelegram) {
@@ -258,23 +292,72 @@ serve(async (req) => {
     }
 
     // 5. Email notification - Generic Flow
-    const shouldSendEmail = !!user?.email && !isAbandonedSchedulerPayload && !isReminderSchedulerPayload;
+    const emailRecipients = new Set<string>();
+    
+    if (user?.email) {
+      emailRecipients.add(user.email);
+    }
+    
+    // Fetch Group Booking participants if it's a booking confirmation
+    if (justConfirmed && record?.booking_id) {
+      try {
+        const sessionRes = await fetch(
+          `${SUPABASE_URL}/rest/v1/group_booking_sessions?booking_id=eq.${record.booking_id}&select=id`,
+          {
+            headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` }
+          }
+        );
+        if (sessionRes.ok) {
+          const sessions = await sessionRes.json();
+          if (Array.isArray(sessions) && sessions.length > 0) {
+            const sessionId = sessions[0].id;
+            const invitesRes = await fetch(
+              `${SUPABASE_URL}/rest/v1/group_booking_invites?group_session_id=eq.${sessionId}&status=eq.accepted&select=friend_email`,
+              {
+                headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` }
+              }
+            );
+            if (invitesRes.ok) {
+              const invites = await invitesRes.json();
+              if (Array.isArray(invites)) {
+                for (const inv of invites) {
+                  if (inv.friend_email) emailRecipients.add(inv.friend_email);
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Error fetching group booking recipients", e);
+      }
+    }
 
-    if (shouldSendEmail) {
-      const client = new SMTPClient({
-        connection: {
-          hostname: "smtp.gmail.com",
-          port: 465,
-          tls: true,
-          auth: { username: GMAIL_ADDRESS, password: GMAIL_APP_PASSWORD },
-        },
-      });
+    if (!isAbandonedSchedulerPayload && !isReminderSchedulerPayload && emailRecipients.size > 0) {
+      // Send to each recipient individually
+      for (const email of emailRecipients) {
+        const client = new SMTPClient({
+          connection: {
+            hostname: "smtp.gmail.com",
+            port: 465,
+            tls: true,
+            auth: { username: GMAIL_ADDRESS, password: GMAIL_APP_PASSWORD },
+          },
+        });
 
-      tasks.push(
-        client.send({ from: GMAIL_ADDRESS, to: user.email, subject: subject, html: emailHtml })
-          .then(() => client.close())
-          .then(() => new Response("ok"))
-      );
+        tasks.push(
+          client.send({ from: GMAIL_ADDRESS, to: email, subject: subject, html: emailHtml })
+            .then(() => {
+              client.close();
+              return new Response("ok");
+            })
+            .catch((e) => {
+              console.error(`Email delivery failed for ${email}:`, e);
+              // close connection on error
+              try { client.close(); } catch (err) {}
+              throw e; // Throw so Promise.allSettled records it as a rejection
+            })
+        );
+      }
     }
 
     // 6. Abandoned Checkout - Independent Idempotent Delivery

@@ -190,11 +190,30 @@ When the user asks to change their existing ticket category (upgrade or downgrad
 3. DOWNGRADE (Cheaper): Use get_user_booking_history to find their existing booking. Call direct_seat_downgrade(booking_id, desired_category). NEVER use cancel_booking + re-book for a downgrade. The direct_seat_downgrade tool handles the category change and initiates the refund automatically.
 4. Approving an Upgrade Notification: If a user says "I received an upgrade notification, please upgrade my seats" or "Approve the upgrade", use get_user_booking_history to find their booking, then call approve_seat_upgrade(booking_id). Relay the exact outcome and payment link (if any) to the user.
 
+GROUP BOOKING WORKFLOW:
+When the user wants to book multiple tickets for friends and wants to coordinate RSVPs (e.g. "book 6 tickets for my friends' birthday", "I want to invite friends"):
+1. Intent: Detect that this is a group coordination request, not a standard immediate booking.
+2. Collection: Identify the event, category, number of seats, and collect the friends' emails.
+3. Initiation: Call initiate_group_booking(event_id, category, seats, friend_emails). DO NOT call book_ticket_transaction here.
+   IMPORTANT: When initiate_group_booking succeeds, it returns a session_id. You MUST include this EXACT real session_id UUID in your final text response to the user (e.g. "Your group booking has been initiated. (Session ID: 8aff05d7-8588-4feb-a5f5-24ee83000e93)"). This ensures the ID is saved in conversation memory for later.
+4. Checking: The user can ask "Did my friends reply?" or "Check my group booking". Extract the real session_id UUID from your earlier messages and call check_group_booking_status(session_id). NEVER invent or fabricate a session ID like "SESSION_123" or "INITIATE_EVT".
+5. Group Session States:
+   - collecting_responses: Waiting for friends to respond. Do not finalize yet.
+   - ready: Required friends have accepted. The initiator is eligible to finalize the group booking.
+   - payment_pending: FINALIZATION HAS ALREADY COMPLETED. A booking already exists and payment is pending. Give the user the existing Razorpay payment link. NEVER create another booking/order. If the user says "finalize my group booking" again, recover and return the existing payment link. DO NOT say "payment_pending means finalization is blocked."
+   - booked: Payment has been successfully verified. Booking is Confirmed/Paid. Do not create another booking.
+6. Finalization: Once all friends accept, the session is "ready". When the user asks to finalize, call finalize_group_booking(session_id) using the exact real session_id. Do not ask for confirmation if they explicitly said "Finalize my group booking". Present the Razorpay link it returns. Do NOT claim the booking is paid before payment.
+   If check_group_booking_status() returns payment_pending + booking_id + payment_link, you should directly tell the user that the booking is finalized and provide the payment link. DO NOT call finalization repeatedly to create another booking.
+7. Cancel: If a friend declines or the user explicitly asks to cancel, call cancel_group_booking(session_id) with the exact real session_id.
+
 ADMIN RESTRICTIONS:
 If the user message has "[User is_admin: true]", the user is an Administrator.
 ADMINS ARE STRICTLY NOT ALLOWED TO BOOK TICKETS.
 - If an admin asks to book tickets, view a booking summary for booking, or confirms a booking, DO NOT call book_ticket_transaction.
 - Instead, politely decline with: "Admin accounts cannot book tickets. Please use a regular user account to make bookings."
+
+ERROR HANDLING & UNKNOWN TOOLS:
+If you request a tool and receive a response indicating an error, or that the tool is "Unknown" or could not be executed, you MUST NOT claim to the user that the action succeeded. You must inform the user that you encountered an error and could not complete the action.
 
 QUERY INDEPENDENCE — CRITICAL:
 Each new user message must be interpreted as-is, using ONLY the content of that message (plus any explicit reference back to a previous message).
@@ -290,6 +309,10 @@ def _build_bound_handlers(user_id: str, chat_id: str | None) -> dict:
         "request_seat_upgrade": lambda booking_id, desired_category: _BASE_HANDLERS["request_seat_upgrade"](user_id, booking_id, desired_category),
         "approve_seat_upgrade": lambda booking_id: _BASE_HANDLERS["approve_seat_upgrade"](user_id, booking_id),
         "direct_seat_downgrade": lambda booking_id, desired_category: _BASE_HANDLERS["direct_seat_downgrade"](user_id, booking_id, desired_category),
+        "initiate_group_booking": lambda event_id, category, seats, friend_emails: _BASE_HANDLERS["initiate_group_booking"](user_id, event_id, category, seats, friend_emails),
+        "check_group_booking_status": lambda session_id: _BASE_HANDLERS["check_group_booking_status"](user_id, session_id),
+        "finalize_group_booking": lambda session_id: _BASE_HANDLERS["finalize_group_booking"](user_id, session_id),
+        "cancel_group_booking": lambda session_id: _BASE_HANDLERS["cancel_group_booking"](user_id, session_id),
     }
 
 

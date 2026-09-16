@@ -99,7 +99,7 @@ export default function AnalyticsDashboard() {
       {/* KPI Overview Cards */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <div className="bg-stage/20 border border-white/[0.04] p-4 rounded-2xl shadow-lg flex flex-col justify-center">
-          <span className="text-[10px] font-mono text-haze uppercase tracking-wider mb-1">Total Revenue</span>
+          <span className="text-[10px] font-mono text-haze uppercase tracking-wider mb-1">Gross Revenue</span>
           <span className="text-2xl font-display text-spot2">₹{overview.total_revenue.toLocaleString()}</span>
         </div>
         <div className="bg-stage/20 border border-white/[0.04] p-4 rounded-2xl shadow-lg flex flex-col justify-center">

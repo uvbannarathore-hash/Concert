@@ -348,6 +348,11 @@ export const api = {
 
   // Buy Advice Demand Signal
   getBuyAdvice: (eventId) => request(`/ai/events/${eventId}/buy-advice`),
+
+  // Group Bookings
+  getGroupInvite: (inviteId) => request(`/group-invite/${inviteId}`),
+  acceptGroupInvite: (inviteId) => request(`/group-invite/${inviteId}/accept`, { method: 'POST' }),
+  declineGroupInvite: (inviteId) => request(`/group-invite/${inviteId}/decline`, { method: 'POST' }),
 }
 
 export function getPublicPassUrl(bookingId) {

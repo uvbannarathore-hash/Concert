@@ -456,6 +456,11 @@ def verify_payment(payload: VerifyPaymentRequest, current_user: dict = Depends(g
         }
     ).eq("booking_id", payload.booking_id).execute()
 
+    # If this was a group booking, mark the session as booked
+    supabase_admin.table("group_booking_sessions").update(
+        {"status": "booked"}
+    ).eq("booking_id", payload.booking_id).execute()
+
     amount = booking_row.get("total_amount")
     if amount is None:
         ticket_row = _get_ticket_or_404(booking_row["event_id"], booking_row["category"])
@@ -588,6 +593,11 @@ async def razorpay_webhook(request: Request):
                     "razorpay_payment_id": razorpay_payment_id,
                     "total_amount": amount,
                 }
+            ).eq("booking_id", booking_row["booking_id"]).execute()
+
+            # If this was a group booking, mark the session as booked
+            supabase_admin.table("group_booking_sessions").update(
+                {"status": "booked"}
             ).eq("booking_id", booking_row["booking_id"]).execute()
 
             # Idempotent insert into payments: only create a new row if this razorpay_payment_id hasn't been recorded yet.

@@ -495,6 +495,216 @@ def approve_seat_upgrade(user_id: str, booking_id: str) -> dict:
             return {"success": False, "message": f"Upgrade failed: {e}"}
 
 # ---------------------------------------------------------------------------
+# Group Booking Coordinator Tools
+# ---------------------------------------------------------------------------
+
+def initiate_group_booking(user_id: str, event_id: str, category: str, seats: int, friend_emails: list) -> dict:
+    from app.services.email_service import send_group_invite_email
+    from datetime import datetime, timedelta, timezone
+
+    # Validate inputs
+    if not friend_emails or not isinstance(friend_emails, list):
+        return {"success": False, "message": "You must provide a list of friend emails."}
+        
+    # Deduplicate and remove initiator
+    user_res = supabase_admin.table("users").select("email, name").eq("user_id", user_id).execute()
+    initiator_email = user_res.data[0].get("email", "").lower() if user_res.data else ""
+    initiator_name = user_res.data[0].get("name", "A friend") if user_res.data else "A friend"
+    
+    unique_emails = []
+    for em in friend_emails:
+        em = em.lower().strip()
+        if em and em != initiator_email and em not in unique_emails:
+            unique_emails.append(em)
+            
+    if not unique_emails:
+        return {"success": False, "message": "No valid friends' emails provided."}
+
+    # Validate availability
+    cat_res = supabase_admin.table("ticket_categories").select("*").eq("event_id", event_id).eq("category", category).execute()
+    if not cat_res.data:
+        return {"success": False, "message": "Invalid event or category."}
+        
+    if cat_res.data[0]["available_seats"] < seats:
+        return {"success": False, "message": f"Only {cat_res.data[0]['available_seats']} seats are available. Cannot book {seats}."}
+        
+    # Create group session (30m expiry)
+    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
+    
+    sess_res = supabase_admin.table("group_booking_sessions").insert({
+        "initiator_user_id": user_id,
+        "event_id": event_id,
+        "category": category,
+        "total_seats": seats,
+        "status": "collecting_responses",
+        "expires_at": expires_at
+    }).execute()
+    
+    if not sess_res.data:
+        return {"success": False, "message": "Failed to create group session."}
+        
+    session_id = sess_res.data[0]["id"]
+    
+    # Create invites and send emails
+    event_res = supabase_admin.table("events").select("event_name:artist_name").eq("event_id", event_id).execute()
+    event_name = event_res.data[0].get("event_name", "a concert") if event_res.data else "a concert"
+    
+    for em in unique_emails:
+        inv_res = supabase_admin.table("group_booking_invites").insert({
+            "group_session_id": session_id,
+            "friend_email": em
+        }).execute()
+        if inv_res.data:
+            invite_id = inv_res.data[0]["id"]
+            send_group_invite_email(invite_id, em, initiator_name, event_name)
+            
+    return {
+        "success": True, 
+        "session_id": session_id,
+        "message": f"Group booking initiated. Invitations sent to {len(unique_emails)} friends. The invitations will expire in 30 minutes."
+    }
+
+def _is_valid_uuid(val: str) -> bool:
+    import uuid
+    try:
+        uuid.UUID(str(val))
+        return True
+    except ValueError:
+        return False
+
+def check_group_booking_status(user_id: str, session_id: str) -> dict:
+    if not _is_valid_uuid(session_id):
+        return {"success": False, "message": "Invalid group booking session ID. You must provide a valid session ID."}
+        
+    from datetime import datetime, timezone
+    session_res = supabase_admin.table("group_booking_sessions").select("*").eq("id", session_id).eq("initiator_user_id", user_id).execute()
+    if not session_res.data:
+        return {"success": False, "message": "Group session not found or does not belong to you."}
+        
+    session = session_res.data[0]
+    invites_res = supabase_admin.table("group_booking_invites").select("*").eq("group_session_id", session_id).execute()
+    invites = invites_res.data
+    
+    # Calculate expiry
+    expires_at_str = session["expires_at"].replace('Z', '+00:00')
+    expires_at = datetime.fromisoformat(expires_at_str)
+    
+    if datetime.now(timezone.utc) > expires_at and session["status"] == "collecting_responses":
+        supabase_admin.table("group_booking_sessions").update({"status": "expired"}).eq("id", session_id).execute()
+        session["status"] = "expired"
+        
+    accepted = len([i for i in invites if i["status"] == "accepted"])
+    declined = len([i for i in invites if i["status"] == "declined"])
+    pending = len([i for i in invites if i["status"] == "pending"])
+    
+    response = {
+        "success": True,
+        "session_id": session_id,
+        "status": session["status"],
+        "total_invited": len(invites),
+        "accepted": accepted,
+        "declined": declined,
+        "pending": pending,
+        "is_expired": session["status"] == "expired"
+    }
+    
+    if session.get("booking_id"):
+        response["booking_id"] = session["booking_id"]
+        booking_res = supabase_admin.table("bookings").select("razorpay_payment_link_id, status, payment_status").eq("booking_id", session["booking_id"]).execute()
+        if booking_res.data:
+            b = booking_res.data[0]
+            response["booking_status"] = b["status"]
+            response["payment_status"] = b["payment_status"]
+            if session["status"] == "payment_pending" and b.get("razorpay_payment_link_id"):
+                from app.voice_agent.voice_db import razorpay_client
+                try:
+                    pl = razorpay_client.payment_link.fetch(b["razorpay_payment_link_id"])
+                    response["payment_link"] = pl.get("short_url")
+                    response["message"] = "Group booking is finalized and awaiting payment."
+                except Exception:
+                    pass
+                    
+    return response
+
+def finalize_group_booking(user_id: str, session_id: str) -> dict:
+    if not _is_valid_uuid(session_id):
+        return {"success": False, "message": "Invalid group booking session ID. You must provide a valid session ID."}
+        
+    session_res = supabase_admin.table("group_booking_sessions").select("*").eq("id", session_id).eq("initiator_user_id", user_id).execute()
+    if not session_res.data:
+        return {"success": False, "message": "Group session not found or does not belong to you."}
+        
+    session = session_res.data[0]
+    
+    if session["status"] == "booked":
+        return {"success": True, "already_finalized": True, "message": "Group booking is already fully confirmed and paid."}
+        
+    if session["status"] == "payment_pending":
+        if not session.get("booking_id"):
+            return {"success": False, "message": "Session is payment_pending but missing booking_id."}
+            
+        booking_res = supabase_admin.table("bookings").select("razorpay_payment_link_id, status, payment_status").eq("booking_id", session["booking_id"]).execute()
+        if not booking_res.data:
+            return {"success": False, "booking_id": session["booking_id"], "message": "The booking already exists, but its record could not be found. No new booking was created."}
+            
+        b = booking_res.data[0]
+        if b["status"] == "Confirmed" or b["payment_status"] == "Paid":
+            # Just in case webhook fired but group session hasn't caught up
+            return {"success": True, "already_finalized": True, "message": "Group booking is already fully confirmed and paid."}
+            
+        link_id = b.get("razorpay_payment_link_id")
+        if not link_id:
+            return {"success": False, "booking_id": session["booking_id"], "message": "The booking already exists, but its payment link could not be recovered. No new booking was created."}
+            
+        # Recover the short URL from razorpay (using the voice_db razorpay_client)
+        from app.voice_agent.voice_db import razorpay_client
+        try:
+            pl = razorpay_client.payment_link.fetch(link_id)
+            return {
+                "success": True,
+                "already_finalized": True,
+                "booking_id": session["booking_id"],
+                "payment_link": pl.get("short_url"),
+                "message": "Group booking is already finalized and awaiting payment. Use the existing payment link."
+            }
+        except Exception as e:
+            return {"success": False, "booking_id": session["booking_id"], "message": f"The booking already exists, but its payment link could not be recovered from Razorpay. No new booking was created. Error: {e}"}
+
+    if session["status"] != "ready":
+        return {"success": False, "message": f"Cannot finalize booking. Current status is {session['status']}."}
+        
+    # Delegate to the standard book_ticket_transaction tool
+    result = book_ticket_transaction(user_id, session["event_id"], session["category"], seats=session["total_seats"])
+    
+    if result.get("success"):
+        # Link the booking and mark payment pending
+        booking_id = result.get("booking_id")
+        if booking_id:
+            supabase_admin.table("group_booking_sessions").update({
+                "status": "payment_pending",
+                "booking_id": booking_id
+            }).eq("id", session_id).execute()
+            
+    return result
+
+def cancel_group_booking(user_id: str, session_id: str) -> dict:
+    if not _is_valid_uuid(session_id):
+        return {"success": False, "message": "Invalid group booking session ID. You must provide a valid session ID."}
+        
+    session_res = supabase_admin.table("group_booking_sessions").select("*").eq("id", session_id).eq("initiator_user_id", user_id).execute()
+    if not session_res.data:
+        return {"success": False, "message": "Group session not found or does not belong to you."}
+        
+    session = session_res.data[0]
+    
+    if session["status"] in ["booked", "payment_pending"]:
+        return {"success": False, "message": "Cannot cancel group session. Payment is already pending or completed."}
+        
+    supabase_admin.table("group_booking_sessions").update({"status": "cancelled"}).eq("id", session_id).execute()
+    
+    return {"success": True, "message": "Group booking session cancelled."}
+
+# ---------------------------------------------------------------------------
 # Concierge Agent Tools (Mocked external APIs)
 # ---------------------------------------------------------------------------
 
@@ -918,6 +1128,53 @@ FUNCTION_DECLARATIONS = [
             },
             "required": ["booking_id", "desired_category"]
         }
+    },
+    {
+        "name": "initiate_group_booking",
+        "description": "Use this tool when a user wants to book multiple tickets for a group of friends and coordinate their RSVPs. You must first collect the event details (event_id, category, number of seats) and a list of the friends' emails. This creates the session and sends invitations.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string", "description": "The event ID."},
+                "category": {"type": "string", "description": "The ticket category."},
+                "seats": {"type": "integer", "description": "Total number of seats needed."},
+                "friend_emails": {"type": "array", "items": {"type": "string"}, "description": "List of friends' email addresses."}
+            },
+            "required": ["event_id", "category", "seats", "friend_emails"]
+        }
+    },
+    {
+        "name": "check_group_booking_status",
+        "description": "Use this to check the current status of an active group booking session, including how many friends have accepted, declined, or are still pending.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "The group session ID."}
+            },
+            "required": ["session_id"]
+        }
+    },
+    {
+        "name": "finalize_group_booking",
+        "description": "Use this tool to finalize a group booking once the session is 'ready' (everyone has accepted). This will lock the inventory and return a Razorpay payment link for the initiator.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "The group session ID."}
+            },
+            "required": ["session_id"]
+        }
+    },
+    {
+        "name": "cancel_group_booking",
+        "description": "Use this tool to cancel a group booking session, e.g., if a friend declined and the user decides to abort.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "The group session ID."}
+            },
+            "required": ["session_id"]
+        }
     }
 ]
 
@@ -945,4 +1202,8 @@ TOOL_HANDLERS = {
     "request_seat_upgrade": request_seat_upgrade,
     "approve_seat_upgrade": approve_seat_upgrade,
     "direct_seat_downgrade": direct_seat_downgrade,
+    "initiate_group_booking": initiate_group_booking,
+    "check_group_booking_status": check_group_booking_status,
+    "finalize_group_booking": finalize_group_booking,
+    "cancel_group_booking": cancel_group_booking,
 }

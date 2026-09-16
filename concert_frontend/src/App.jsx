@@ -12,6 +12,7 @@ import TicketPassPage from './pages/TicketPassPage'
 import ListYourShowPage from './pages/ListYourShowPage'
 import ArtistProfilePage from './pages/ArtistProfilePage'
 import VenueProfilePage from './pages/VenueProfilePage'
+import GroupInvitePage from './pages/GroupInvitePage'
 import ChatWidget from './components/ChatWidget'
 import VoiceWidget from './components/VoiceWidget'
 import { api } from './lib/api'
@@ -32,6 +33,7 @@ export default function App() {
           <Route path="/artists/:id" element={<ArtistProfilePage />} />
           <Route path="/venues/:id" element={<VenueProfilePage />} />
           <Route path="/ticket/:bookingId" element={<TicketPassPage />} />
+          <Route path="/group-invite/:inviteId" element={<GroupInvitePage />} />
           <Route path="/login" element={<AuthPage />} />
           <Route
             path="/bookings"
