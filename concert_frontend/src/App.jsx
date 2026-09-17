@@ -3,6 +3,8 @@ import NavBar from './components/NavBar'
 import HomePage from './pages/HomePage'
 import ConcertDetailPage from './pages/ConcertDetailPage'
 import AuthPage from './pages/AuthPage'
+import AuthCallbackPage from './pages/AuthCallbackPage'
+import CompleteProfilePage from './pages/CompleteProfilePage'
 import BookingsPage from './pages/BookingsPage'
 import ChatPage from './pages/ChatPage'
 import AdminPage from './pages/AdminPage'
@@ -35,6 +37,8 @@ export default function App() {
           <Route path="/ticket/:bookingId" element={<TicketPassPage />} />
           <Route path="/group-invite/:inviteId" element={<GroupInvitePage />} />
           <Route path="/login" element={<AuthPage />} />
+          <Route path="/auth/callback" element={<AuthCallbackPage />} />
+          <Route path="/complete-profile" element={<CompleteProfilePage />} />
           <Route
             path="/bookings"
             element={

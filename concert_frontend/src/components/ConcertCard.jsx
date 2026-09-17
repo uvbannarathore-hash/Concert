@@ -34,6 +34,8 @@ export default function ConcertCard({ event, wishlisted = false, onWishlistChang
   const primary = showtimes[0]
   const overallStatus = showtimes.every((s) => s.status === 'Cancelled')
     ? 'Cancelled'
+    : showtimes.every((s) => s.status === 'Completed')
+    ? 'Completed'
     : showtimes.every((s) => s.status === 'Sold Out')
     ? 'Sold Out'
     : 'Upcoming'
@@ -91,7 +93,7 @@ export default function ConcertCard({ event, wishlisted = false, onWishlistChang
             <img
               src={event.image_url}
               alt={event.artist_name || 'Event'}
-              className="absolute inset-0 w-full h-full object-cover object-center
+              className="absolute inset-0 w-full h-full object-contain object-center
                          group-hover:scale-105 transition-transform duration-700 ease-out"
               onError={(e) => {
                 e.currentTarget.style.display = 'none'

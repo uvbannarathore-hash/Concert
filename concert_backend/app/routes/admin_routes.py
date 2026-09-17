@@ -94,6 +94,7 @@ async def admin_chat(
                 file_options={
                     "content-type": image.content_type or "application/octet-stream",
                     "upsert": "true",
+                    "cache-control": "public, max-age=31536000, immutable"
                 },
             )
             public_url_response = supabase_admin.storage.from_("event-images").get_public_url(filename)
@@ -289,18 +290,23 @@ def approve_show_submission(submission_id: int, background_tasks: BackgroundTask
     event_id = f"EVT{uuid.uuid4().hex[:12]}"
     
     normalized_artist_name = row["artist_name"].strip()
-    artist_res = supabase_admin.table("artists").select("artist_id").eq("name", normalized_artist_name).execute()
     
-    if artist_res.data:
-        artist_id = artist_res.data[0]["artist_id"]
+    # If the event is a Movie, Play, or Sports (no specific lead performer), 
+    # we don't force a dummy artist record.
+    if row["event_type"] in ["Movie", "Play", "Sports"]:
+        artist_id = None
     else:
-        hash_str = hashlib.md5(normalized_artist_name.lower().encode('utf-8')).hexdigest()
-        artist_id = f"ART_{hash_str[:10].upper()}"
-        supabase_admin.table("artists").insert({
-            "artist_id": artist_id,
-            "name": normalized_artist_name,
-        }).execute()
+        artist_res = supabase_admin.table("artists").select("artist_id").eq("name", normalized_artist_name).execute()
         
+        if artist_res.data:
+            artist_id = artist_res.data[0]["artist_id"]
+        else:
+            hash_str = hashlib.md5(normalized_artist_name.lower().encode('utf-8')).hexdigest()
+            artist_id = f"ART_{hash_str[:10].upper()}"
+            supabase_admin.table("artists").insert({
+                "artist_id": artist_id,
+                "name": normalized_artist_name,
+            }).execute()
     normalized_venue_name = row["venue_name"].strip()
     normalized_city = row["city"].strip()
     
@@ -529,6 +535,7 @@ async def upload_artist_image(artist_id: str, image: UploadFile = File(...), adm
             file_options={
                 "content-type": image.content_type or "application/octet-stream",
                 "upsert": "true",
+                "cache-control": "public, max-age=31536000, immutable"
             },
         )
         public_url_response = supabase_admin.storage.from_("event-images").get_public_url(filename)
@@ -585,6 +592,7 @@ async def upload_venue_image(venue_id: str, image: UploadFile = File(...), admin
             file_options={
                 "content-type": image.content_type or "application/octet-stream",
                 "upsert": "true",
+                "cache-control": "public, max-age=31536000, immutable"
             },
         )
         public_url_response = supabase_admin.storage.from_("event-images").get_public_url(filename)

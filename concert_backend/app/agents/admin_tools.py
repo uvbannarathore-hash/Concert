@@ -14,8 +14,11 @@ almost verbatim, since those were already tuned through real usage.
 from app.supabase_client import supabase_admin
 from google import genai
 from app.config import GEMINI_API_KEY
+from app.services import embedding_service
+import logging
 
 _client = genai.Client(api_key=GEMINI_API_KEY)
+logger = logging.getLogger("admin_tools")
 _last_generated_description: str | None = None
 
 # ---------------------------------------------------------------------------
@@ -45,6 +48,8 @@ def update_event(
     description: str = None,
     generated_description: str = None,
 ) -> dict:
+    global _last_generated_description
+    
     # Use provided description, fallback to generated_description from flow, then to last stored description.
     if description is None:
         if generated_description is not None:
@@ -74,7 +79,20 @@ def update_event(
 
     result = supabase_admin.table("events").update(fields).eq("event_id", event_id).execute()
     if not result.data:
-        return {"error": f"No event found with event_id {event_id}"}
+        return {"error": f"Failed to update event {event_id}"}
+        
+    # Generate and update embedding asynchronously/safely without failing the main operation
+    try:
+        # Re-fetch the complete current event row from Supabase
+        fetch_result = supabase_admin.table("events").select("*").eq("event_id", event_id).execute()
+        if fetch_result.data:
+            complete_event = fetch_result.data[0]
+            vector = embedding_service.generate_event_embedding(complete_event)
+            if vector:
+                supabase_admin.table("events").update({"embedding": vector}).eq("event_id", event_id).execute()
+    except Exception as e:
+        logger.error(f"Failed to generate embedding after event update for {event_id}: {e}")
+
     return {"status": "updated", "event_id": event_id, "updated_fields": list(fields.keys())}
 
 
@@ -126,9 +144,13 @@ def check_seat_availability(event_id: str) -> dict:
     return {"event_id": event_id, "categories": categories}
 
 
+def list_venues() -> dict:
+    result = supabase_admin.table("venues").select("venue_id, name, city").execute()
+    return {"venues": result.data}
+
+
 def create_event1(
     event_id: str,
-    artist_id: str,
     artist_name: str,
     venue_id: str,
     venue_name: str,
@@ -137,6 +159,7 @@ def create_event1(
     event_time: str,
     event_type: str,
     categories: list,
+    artist_id: str = None,
     image_url: str = None,
     latitude: float = None,
     longitude: float = None,
@@ -150,6 +173,27 @@ def create_event1(
     """
     if not categories:
         return {"error": "At least one ticket category is required."}
+
+    if not artist_id:
+        import hashlib
+        res = supabase_admin.table("artists").select("artist_id").eq("name", artist_name).execute()
+        if res.data:
+            artist_id = res.data[0]["artist_id"]
+        else:
+            name_hash = hashlib.md5(artist_name.encode("utf-8")).hexdigest()[:10].upper()
+            artist_id = f"ART_{name_hash}"
+            supabase_admin.table("artists").insert({"artist_id": artist_id, "name": artist_name}).execute()
+
+    if venue_name:
+        venue_query = supabase_admin.table("venues").select("venue_id").ilike("name", f"%{venue_name}%")
+        if city:
+            venue_query = venue_query.ilike("city", f"%{city}%")
+        venue_res = venue_query.execute()
+        if venue_res.data:
+            venue_id = venue_res.data[0]["venue_id"]
+        else:
+            city_str = city if city else 'any city'
+            return {"error": f"Venue not registered: '{venue_name}' in {city_str}. Use list_venues to find valid venues, do not invent IDs."}
 
     result = supabase_admin.rpc(
         "create_event_with_pricing",
@@ -169,7 +213,32 @@ def create_event1(
             "p_longitude": longitude,
         },
     ).execute()
-    return result.data
+    
+    rpc_result = result.data
+    
+    # Generate and store embedding so it's instantly searchable
+    try:
+        if isinstance(rpc_result, dict) and "error" in rpc_result:
+            return rpc_result
+            
+        # Reconstruct event dict for embedding
+        event_dict = {
+            "event_id": event_id,
+            "artist_name": artist_name,
+            "venue_name": venue_name if venue_name else "",
+            "city": city,
+            "event_date": event_date,
+            "event_time": event_time,
+            "event_type": event_type,
+            "description": "" # Generated description isn't saved here, but the rest is enough
+        }
+        vector = embedding_service.generate_event_embedding(event_dict)
+        if vector:
+            supabase_admin.table("events").update({"embedding": vector}).eq("event_id", event_id).execute()
+    except Exception as e:
+        logger.error(f"Failed to generate embedding after event creation for {event_id}: {e}")
+
+    return rpc_result
 
 
 def get_user_bookings(identifier: str) -> dict:
@@ -270,6 +339,11 @@ FUNCTION_DECLARATIONS = [
         "parameters": {"type": "object", "properties": {}},
     },
     {
+        "name": "list_venues",
+        "description": "Use this to list all registered venues. Returns venue_id, name, and city. Always use this to look up valid venue IDs before creating an event if the admin provides a venue name.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    {
         "name": "update_event",
         "description": "Use this to modify details of an existing event. Always confirm the "
         "event_id via list_events first if not already known. Only pass fields the admin "
@@ -284,7 +358,7 @@ FUNCTION_DECLARATIONS = [
                 "event_date": {"type": "string", "description": "Event date in YYYY-MM-DD format."},
                 "event_time": {"type": "string", "description": "Event time e.g. 19:00."},
                 "event_type": {"type": "string", "description": "One of: Concert, Movie, Comedy Show, Music Show, Play, Sports."},
-                "artist_id": {"type": "string", "description": "ID for the artist or performer."},
+                "artist_id": {"type": "string", "description": "ID for the artist or performer. Pass null/empty for non-artist events like Movies/Plays."},
                 "venue_id": {"type": "string", "description": "ID for the venue."},
                 "image_url": {"type": "string", "description": "New image URL, from an [Uploaded image URL: ...] segment if present."},
                 "latitude": {"type": "string", "description": "New venue latitude, from a [Venue Location: lat,lng] segment if present."},
@@ -362,8 +436,8 @@ FUNCTION_DECLARATIONS = [
             "type": "object",
             "properties": {
                 "event_id": {"type": "string", "description": "A short unique ID for the event, e.g. EVTARIJIT1512."},
-                "artist_id": {"type": "string", "description": "A short ID for the artist/performer."},
                 "artist_name": {"type": "string", "description": "The artist, performer, or movie/show title."},
+                "artist_id": {"type": "string", "description": "A short ID for the artist/performer. Pass null/empty for non-artist events like Movies/Plays."},
                 "venue_id": {"type": "string", "description": "A short ID for the venue."},
                 "venue_name": {"type": "string", "description": "The venue name."},
                 "city": {"type": "string", "description": "The city where the event is held."},
@@ -387,7 +461,7 @@ FUNCTION_DECLARATIONS = [
                 "latitude": {"type": "number", "description": "Venue latitude, from a [Venue Location: lat,lng] segment if present."},
                 "longitude": {"type": "number", "description": "Venue longitude, from a [Venue Location: lat,lng] segment if present."},
             },
-            "required": ["event_id", "artist_id", "artist_name", "venue_id", "venue_name", "city", "event_date", "event_time", "event_type", "categories"],
+            "required": ["event_id", "artist_name", "venue_id", "venue_name", "city", "event_date", "event_time", "event_type", "categories"],
         },
     },
     {
@@ -505,4 +579,5 @@ TOOL_HANDLERS = {
     "get_refund_list": get_refund_list,
     "update_seats": update_seats,
     "generate_event_description": generate_event_description,
+    "list_venues": list_venues,
 }

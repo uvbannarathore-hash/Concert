@@ -6,8 +6,9 @@ all existing events that don't yet have an embedding stored in the database.
 Usage:
     python scripts/backfill_embeddings.py           # skip already-embedded events
     python scripts/backfill_embeddings.py --force   # regenerate all embeddings
+    python scripts/backfill_embeddings.py --batch-size 50
 
-Respects free-tier limits: 100 RPM, 30,000 TPM, 1,000 RPD.
+Respects free-tier limits by batching requests (up to 100 per call).
 """
 
 import sys
@@ -15,6 +16,7 @@ import time
 import argparse
 import logging
 import os
+import random
 
 # Allow running from the concert_backend directory
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -23,21 +25,48 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
 
 from app.supabase_client import supabase_admin
-from app.services.embedding_service import generate_event_embedding
+from app.services.embedding_service import generate_event_embeddings_batch
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("backfill_embeddings")
 
-# Safety pacing: max ~60 RPM (well under 100 RPM limit)
-REQUESTS_PER_MINUTE = 60
-DELAY_BETWEEN_REQUESTS = 60.0 / REQUESTS_PER_MINUTE  # ~1 second between requests
+# Safety pacing
+DELAY_BETWEEN_BATCHES = 1.0  # seconds between batch requests
 MAX_RETRIES = 3
-RETRY_WAIT = 5  # seconds to wait before retry
+
+def chunk_list(lst, n):
+    """Yield successive n-sized chunks from lst."""
+    for i in range(0, len(lst), n):
+        yield lst[i:i + n]
+
+def process_batch(batch_events, attempt=1):
+    """Process a batch of events with exponential backoff."""
+    batch_size = len(batch_events)
+    try:
+        vectors = generate_event_embeddings_batch(batch_events)
+        if vectors is None or len(vectors) != batch_size:
+            raise ValueError(f"generate_event_embeddings_batch returned invalid length (expected {batch_size})")
+        return vectors
+    except Exception as exc:
+        logger.warning(f"Batch generation error (Attempt {attempt}/{MAX_RETRIES}): {exc}")
+        if attempt < MAX_RETRIES:
+            # Exponential backoff: 2^attempt + jitter
+            sleep_time = (2 ** attempt) + random.uniform(0, 1)
+            logger.info(f"Retrying batch in {sleep_time:.2f} seconds...")
+            time.sleep(sleep_time)
+            return process_batch(batch_events, attempt + 1)
+        else:
+            logger.error(f"Batch generation failed after {MAX_RETRIES} attempts.")
+            return None
 
 def main():
+    default_batch = int(os.environ.get("EMBEDDING_BATCH_SIZE", "100"))
+    
     parser = argparse.ArgumentParser(description="Backfill event embeddings")
     parser.add_argument("--force", action="store_true",
                         help="Regenerate embeddings for ALL events, even those already embedded")
+    parser.add_argument("--batch-size", type=int, default=default_batch,
+                        help=f"Number of events to process per API call (default: {default_batch})")
     args = parser.parse_args()
 
     logger.info("Fetching all events from Supabase...")
@@ -58,53 +87,58 @@ def main():
 
     logger.info(f"Already embedded: {already_embedded}")
     logger.info(f"To process: {len(to_process)}")
+    
+    if not to_process:
+        logger.info("Nothing to process.")
+        return
 
     success_count = 0
     fail_count = 0
+    failed_event_ids = []
 
-    for i, event in enumerate(to_process):
-        event_id = event["event_id"]
-        logger.info(f"[{i+1}/{len(to_process)}] Embedding event {event_id} — {event.get('artist_name', '?')}")
-
-        vector = None
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                vector = generate_event_embedding(event)
-                if vector:
-                    break
-                else:
-                    logger.warning(f"  Attempt {attempt}: generate_event_embedding returned None")
-            except Exception as exc:
-                logger.warning(f"  Attempt {attempt}: Error — {exc}")
-                if attempt < MAX_RETRIES:
-                    time.sleep(RETRY_WAIT)
-
-        if vector:
+    batches = list(chunk_list(to_process, args.batch_size))
+    
+    for i, batch in enumerate(batches):
+        logger.info(f"Processing Batch {i+1}/{len(batches)} (Size: {len(batch)})...")
+        
+        vectors = process_batch(batch)
+        
+        if not vectors:
+            # Entire batch failed to generate
+            fail_count += len(batch)
+            failed_event_ids.extend([e["event_id"] for e in batch])
+            continue
+            
+        # Update DB for each successfully generated vector in the batch
+        for j, event in enumerate(batch):
+            event_id = event["event_id"]
+            vector = vectors[j]
+            
+            if vector is None:
+                logger.error(f"  ✗ Event {event_id}: Model returned None for embedding")
+                fail_count += 1
+                failed_event_ids.append(event_id)
+                continue
+                
             try:
                 supabase_admin.table("events") \
                     .update({"embedding": vector}) \
                     .eq("event_id", event_id) \
                     .execute()
-                logger.info(f"  ✓ Stored embedding ({len(vector)} dims)")
                 success_count += 1
             except Exception as exc:
-                logger.error(f"  ✗ Failed to store embedding: {exc}")
+                logger.error(f"  ✗ Failed to store embedding for {event_id}: {exc}")
                 fail_count += 1
-        else:
-            logger.error(f"  ✗ Could not generate embedding after {MAX_RETRIES} attempts")
-            fail_count += 1
+                failed_event_ids.append(event_id)
 
-        # Pace requests to respect free-tier limits
-        if i < len(to_process) - 1:
-            time.sleep(DELAY_BETWEEN_REQUESTS)
+        if i < len(batches) - 1:
+            time.sleep(DELAY_BETWEEN_BATCHES)
 
-    print("\n" + "="*50)
-    print("BACKFILL SUMMARY")
-    print(f"  Total events:      {total}")
-    print(f"  Already embedded:  {already_embedded}")
-    print(f"  Successfully embedded: {success_count}")
-    print(f"  Failed:            {fail_count}")
-    print("="*50)
+    logger.info("--- Backfill Complete ---")
+    logger.info(f"Successfully updated: {success_count}")
+    logger.info(f"Failed to update: {fail_count}")
+    if failed_event_ids:
+        logger.warning(f"Failed Event IDs: {failed_event_ids}")
 
 if __name__ == "__main__":
     main()

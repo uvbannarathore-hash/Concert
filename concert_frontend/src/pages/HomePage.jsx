@@ -91,12 +91,19 @@ export default function HomePage() {
   }, [profile])
 
   useEffect(() => {
+    const controller = new AbortController()
     setLoading(true)
     api
-      .listConcerts(city || undefined, eventType || undefined, dateFrom || undefined, dateTo || undefined)
+      .listConcerts(city || undefined, eventType || undefined, dateFrom || undefined, dateTo || undefined, { signal: controller.signal })
       .then((data) => setEvents(data.events || []))
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false))
+      .catch((err) => {
+        if (err.name === 'AbortError') return
+        setError(err.message)
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false)
+      })
+    return () => controller.abort()
   }, [city, eventType, dateFrom, dateTo])
 
   useEffect(() => {
@@ -117,12 +124,19 @@ export default function HomePage() {
       setAiSearchError('')
       return
     }
+    const controller = new AbortController()
     setAiSearchLoading(true)
     setAiSearchError('')
-    api.semanticSearch(searchQuery.trim())
+    api.semanticSearch(searchQuery.trim(), { signal: controller.signal })
       .then((data) => setAiSearchResults(data.results || []))
-      .catch(() => setAiSearchError('Semantic search failed. Showing keyword matches instead.'))
-      .finally(() => setAiSearchLoading(false))
+      .catch((err) => {
+        if (err.name === 'AbortError') return
+        setAiSearchError('Semantic search failed. Showing keyword matches instead.')
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setAiSearchLoading(false)
+      })
+    return () => controller.abort()
   }, [searchQuery])
 
   // Auto-rotate carousel slides
@@ -358,6 +372,7 @@ export default function HomePage() {
               artist_id: e.artist_id || liveEvent?.artist_id,
               venue_id: e.venue_id || liveEvent?.venue_id,
               event_type: e.event_type || liveEvent?.event_type,
+              image_url: liveEvent?.image_url || e.image_url,
               status: liveEvent ? liveEvent.status : (e.status || 'Upcoming'),
               showtimes: []
             }

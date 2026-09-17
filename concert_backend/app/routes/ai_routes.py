@@ -1,10 +1,12 @@
 import logging
-from fastapi import APIRouter, HTTPException, Body, Depends
+import asyncio
+from fastapi import APIRouter, HTTPException, Body, Depends, Request
 from pydantic import BaseModel
 from typing import List, Optional
 
 from app.supabase_client import supabase_anon
 from app.services.embedding_service import generate_query_embedding
+from app.services.event_status_service import check_and_update_event_status
 from app.auth import get_current_user
 
 logger = logging.getLogger("ai_routes")
@@ -26,8 +28,8 @@ def get_buy_advice_endpoint(event_id: str):
     return result
 
 @router.post("/search", response_model=SearchResponse)
-def search_events(request: SearchRequest):
-    query = request.query.strip()
+async def search_events(payload: SearchRequest, request: Request):
+    query = payload.query.strip()
     if not query:
         raise HTTPException(status_code=400, detail="Query cannot be empty")
         
@@ -35,21 +37,28 @@ def search_events(request: SearchRequest):
         query = query[:500]
         
     try:
-        # Generate embedding
-        query_embedding = generate_query_embedding(query)
+        # Check if already disconnected before we even start
+        if await request.is_disconnected():
+            logger.info("Search request cancelled before starting")
+            return {"results": []}
+            
+        # Generate embedding (blocking, run in thread)
+        query_embedding = await asyncio.to_thread(generate_query_embedding, query)
         if not query_embedding:
             raise HTTPException(status_code=500, detail="Failed to generate embedding for query")
             
-        # Call RPC
-        # Using a match_threshold of 0.6 (this can be tuned) and match_count of 20
-        rpc_result = supabase_anon.rpc(
-            "match_events",
-            {
-                "query_embedding": query_embedding,
-                "match_threshold": 0.6,
-                "match_count": 20
-            }
-        ).execute()
+        # Call RPC (blocking, run in thread)
+        def run_rpc():
+            return supabase_anon.rpc(
+                "match_events",
+                {
+                    "query_embedding": query_embedding,
+                    "match_threshold": 0.6,
+                    "match_count": 50
+                }
+            ).execute()
+            
+        rpc_result = await asyncio.to_thread(run_rpc)
         
         matches = rpc_result.data
         if not matches:
@@ -65,28 +74,41 @@ def search_events(request: SearchRequest):
             "latitude, longitude, description, "
             "ticket_categories(price_inr)"
         )
-        events_result = supabase_anon.table("events") \
-            .select(FIELDS) \
-            .in_("event_id", event_ids) \
-            .execute()
-            
-        current_events = {e["event_id"]: e for e in events_result.data}
         
-        # Preserve similarity ranking from the RPC
+        def fetch_events():
+            return supabase_anon.table("events") \
+                .select(FIELDS) \
+                .in_("event_id", event_ids) \
+                .execute()
+                
+        events_result = await asyncio.to_thread(fetch_events)
+            
+        current_events_list = check_and_update_event_status(events_result.data)
+        current_events = {e["event_id"]: e for e in current_events_list}
+        
+        # Preserve similarity ranking from the RPC, filter active, limit to 20
         ranked_results = []
         for m in matches:
             event_id = m["event_id"]
             if event_id in current_events:
                 event_data = current_events[event_id]
+                # Filter out inactive events
+                if event_data.get("status") in ("Completed", "Cancelled"):
+                    continue
                 event_data["similarity_score"] = m["similarity"]
                 ranked_results.append(event_data)
+                if len(ranked_results) >= 20:
+                    break
                 
         return {"results": ranked_results}
         
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        logger.info(f"Search request cancelled by client for query: {query}")
+        return {"results": []}
     except Exception as e:
-        logger.error(f"Search API error: {str(e)}")
+        logger.error(f"Search API error: {str(e)}", exc_info=True, extra={"query": query})
         raise HTTPException(status_code=500, detail="Internal server error during search")
 
 class PlanRequest(BaseModel):

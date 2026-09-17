@@ -97,7 +97,7 @@ async function tryRefreshToken() {
   }
 }
 
-async function request(path, { method = 'GET', body, auth = false, _retried = false } = {}) {
+async function request(path, { method = 'GET', body, auth = false, _retried = false, signal } = {}) {
   const headers = { 
     'Content-Type': 'application/json',
     'Bypass-Tunnel-Reminder': 'true',
@@ -113,6 +113,7 @@ async function request(path, { method = 'GET', body, auth = false, _retried = fa
     method,
     headers,
     body: body ? JSON.stringify(body) : undefined,
+    signal,
   })
 
   // On 401, try a silent token refresh once and replay the request.
@@ -120,7 +121,7 @@ async function request(path, { method = 'GET', body, auth = false, _retried = fa
   // (Supabase default: 1 hour) without forcing the user to log in again.
   if (res.status === 401 && auth && !_retried) {
     const refreshed = await tryRefreshToken()
-    if (refreshed) return request(path, { method, body, auth, _retried: true })
+    if (refreshed) return request(path, { method, body, auth, _retried: true, signal })
     // Refresh failed — session is cleared, surface a clean error.
     throw new Error('Session expired. Please log in again.')
   }
@@ -138,6 +139,9 @@ async function request(path, { method = 'GET', body, auth = false, _retried = fa
 }
 
 export const api = {
+  // Bridge for OAuth flows to inject Supabase sessions into our custom token storage
+  setSessionExternal: (sessionData) => setSession(sessionData),
+
   // phone, city, and address are now REQUIRED at signup (backend enforces this too)
   signup: (email, password, name, phone, city, address) =>
     request('/auth/signup', { method: 'POST', body: { email, password, name, phone, city, address } }),
@@ -158,14 +162,14 @@ export const api = {
   isLoggedIn: () => !!getToken(),
   currentEmail: () => localStorage.getItem('email'),
 
-  listConcerts: (city, eventType, dateFrom, dateTo) => {
+  listConcerts: (city, eventType, dateFrom, dateTo, options = {}) => {
     const params = new URLSearchParams()
     if (city) params.set('city', city)
     if (eventType) params.set('event_type', eventType)
     if (dateFrom) params.set('date_from', dateFrom)
     if (dateTo) params.set('date_to', dateTo)
     const qs = params.toString()
-    return request(`/concerts${qs ? `?${qs}` : ''}`)
+    return request(`/concerts${qs ? `?${qs}` : ''}`, options)
   },
 
   getRecommendations: () => request('/concerts/recommendations', { auth: true }),
@@ -343,8 +347,7 @@ export const api = {
   leaveWaitlist: (eventId) => request(`/waitlist/leave/${eventId}`, { method: 'DELETE', auth: true }),
 
   // AI Semantic Search
-  semanticSearch: (query) =>
-    request('/ai/search', { method: 'POST', body: { query } }),
+  semanticSearch: (query, options = {}) => request('/ai/search', { method: 'POST', body: { query }, ...options }),
 
   // Buy Advice Demand Signal
   getBuyAdvice: (eventId) => request(`/ai/events/${eventId}/buy-advice`),

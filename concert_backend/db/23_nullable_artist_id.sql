@@ -1,0 +1,33 @@
+-- 1. Make the events.artist_id column nullable
+ALTER TABLE public.events ALTER COLUMN artist_id DROP NOT NULL;
+
+-- 2. Update the create_event_with_pricing RPC
+-- (Since the full body is stored in Supabase, execute this in the SQL Editor,
+-- replacing the body with your existing function body)
+
+-- CREATE OR REPLACE FUNCTION public.create_event_with_pricing(
+--     p_event_id text,
+--     p_artist_id text DEFAULT NULL, -- <-- MAKE THIS OPTIONAL/DEFAULT NULL
+--     p_artist_name text,
+--     p_venue_id text,
+--     p_venue_name text,
+--     p_city text,
+--     p_event_date date,
+--     p_event_time time without time zone,
+--     p_event_type text,
+--     p_categories jsonb,
+--     p_image_url text DEFAULT NULL,
+--     p_latitude double precision DEFAULT NULL,
+--     p_longitude double precision DEFAULT NULL
+-- ) RETURNS json
+-- LANGUAGE plpgsql
+-- AS $$
+-- BEGIN
+--     -- (Keep existing body, ensuring it handles p_artist_id being NULL safely during INSERT)
+--     INSERT INTO public.events (event_id, artist_id, artist_name, venue_id, venue_name, city, event_date, event_time, event_type, image_url, latitude, longitude)
+--     VALUES (p_event_id, p_artist_id, p_artist_name, p_venue_id, p_venue_name, p_city, p_event_date, p_event_time, p_event_type, p_image_url, p_latitude, p_longitude);
+--     
+--     -- (Keep existing pricing insertion logic)
+--     ...
+-- END;
+-- $$;

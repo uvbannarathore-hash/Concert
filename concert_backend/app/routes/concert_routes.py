@@ -1,12 +1,16 @@
+from datetime import datetime, timezone, timedelta
 import json
 import logging
 from fastapi import APIRouter, HTTPException, Depends
 from app.supabase_client import supabase_admin
 from app.auth import get_current_user
+from app.services.event_status_service import check_and_update_event_status
 
 logger = logging.getLogger("concert_routes")
 
 router = APIRouter(prefix="/concerts", tags=["concerts"])
+
+
 
 
 @router.get("")
@@ -20,7 +24,7 @@ def list_concerts(
     Returns all upcoming events, optionally filtered by city, event_type, and dates.
     Public endpoint - no login required, just like browsing BookMyShow.
     """
-    query = supabase_admin.table("events").select("*, ticket_categories(price_inr)").in_("status", ["Upcoming", "Sold Out"])
+    query = supabase_admin.table("events").select("*, ticket_categories(price_inr)")
     if city:
         query = query.eq("city", city)
     if event_type:
@@ -31,7 +35,8 @@ def list_concerts(
         query = query.lte("event_date", date_to)
 
     result = query.execute()
-    return {"events": result.data}
+    events = check_and_update_event_status(result.data or [])
+    return {"events": events}
 
 
 @router.get("/recommendations")
@@ -200,6 +205,7 @@ def get_recommendations(user: dict = Depends(get_current_user)):
         if e["event_id"] not in all_booked_ids:
             e["similarity_score"] = 0.0
             final_fallback.append(e)
+    final_fallback = check_and_update_event_status(final_fallback)
             
     return {"results": final_fallback[:10]}
 
@@ -209,9 +215,12 @@ def get_concert_detail(event_id: str):
     """
     Returns a single event plus its ticket categories/pricing.
     """
-    event = supabase_admin.table("events").select("*").eq("event_id", event_id).execute()
-    if not event.data:
+    event_res = supabase_admin.table("events").select("*").eq("event_id", event_id).execute()
+    if not event_res.data:
         raise HTTPException(status_code=404, detail="Event not found")
+        
+    events = check_and_update_event_status(event_res.data)
+    event_data = events[0]
 
     tickets = (
         supabase_admin.table("ticket_categories")
@@ -220,7 +229,7 @@ def get_concert_detail(event_id: str):
         .execute()
     )
 
-    return {"event": event.data[0], "ticket_categories": tickets.data}
+    return {"event": event_data, "ticket_categories": tickets.data}
 
 
 @router.get("/{event_id}/seats")

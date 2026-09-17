@@ -530,9 +530,13 @@ export default function ConcertDetailPage() {
           <div className="space-y-2">
             <p className="eyebrow">{event.city} · {formatDate(event.event_date)}</p>
             <h1 className="font-display text-5xl sm:text-6xl tracking-wide uppercase text-paper hover:text-spot transition-colors">
-              <Link to={`/artists/${event.artist_id}`}>
-                {event.artist_name}
-              </Link>
+              {event.artist_id ? (
+                <Link to={`/artists/${event.artist_id}`}>
+                  {event.artist_name}
+                </Link>
+              ) : (
+                <span className="cursor-default">{event.artist_name}</span>
+              )}
             </h1>
             <p className="text-base text-haze flex items-center gap-1">
               <MapPin className="w-4 h-4 text-spot flex-shrink-0 inline" /> <Link to={`/venues/${event.venue_id}`} className="hover:underline hover:text-spot2 transition-colors">{event.venue_name}</Link> — {event.event_time}
