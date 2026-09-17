@@ -4,11 +4,10 @@ from google import genai
 from google.genai import types
 from app.config import GEMINI_API_KEY
 from app.supabase_client import supabase_admin
+from app.services.ai_service import generate_content_with_fallback
 
 logger = logging.getLogger("summarization_service")
 
-# Initialize client using existing configuration
-_client = genai.Client(api_key=GEMINI_API_KEY)
 MODEL_NAME = "models/gemini-3.1-flash-lite"
 
 def get_review_summary(entity_type: str, entity_id: str) -> Dict[str, Any]:
@@ -55,7 +54,7 @@ Do not use markdown.
 Do not prepend "AI Summary:"."""
 
     try:
-        response = _client.models.generate_content(
+        response = generate_content_with_fallback(
             model=MODEL_NAME,
             contents=[
                 types.Content(role="user", parts=[

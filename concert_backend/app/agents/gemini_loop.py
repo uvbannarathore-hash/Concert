@@ -27,6 +27,7 @@ from google import genai
 from google.genai import types
 
 from app.config import GEMINI_API_KEY
+from app.services.ai_service import generate_content_with_fallback
 
 logger = logging.getLogger("gemini_loop")
 
@@ -46,7 +47,7 @@ def _make_hashable(value: Any) -> Any:
         return tuple(_make_hashable(v) for v in value)
     return value
 
-MODEL_NAME = "gemini-3.1-flash-lite"
+MODEL_NAME = "gemini-3.1-flash-lite" 
 MAX_TOOL_ITERATIONS = 8  # safety valve against infinite tool-call loops
 
 _client = genai.Client(api_key=GEMINI_API_KEY)
@@ -84,41 +85,22 @@ async def run_agent(
     import asyncio
 
     for _ in range(MAX_TOOL_ITERATIONS):
-        max_503_retries = 1
-        response = None
-        for attempt in range(max_503_retries + 1):
-            try:
-                rough_char_count = len(str(contents))
-                
-                start_time = time.perf_counter()
-                response = _client.models.generate_content(
-                    model=MODEL_NAME,
-                    contents=contents,
-                    config=config,
-                )
-                llm_latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
-                
-                logger.info(
-                    f"Gemini API request: Iteration {_}, Context size roughly {rough_char_count} chars", 
-                    extra={"extra_data": {"llm_latency_ms": llm_latency_ms, "input_chars": rough_char_count, "model": MODEL_NAME}}
-                )
-                break
-            except Exception as e:
-                err_str = str(e)
-                if "503" in err_str or "UNAVAILABLE" in err_str:
-                    if attempt < max_503_retries:
-                        backoff = 1
-                        logger.warning(f"Gemini 503 UNAVAILABLE. Retrying in {backoff}s (attempt {attempt+1}/{max_503_retries})...")
-                        await asyncio.sleep(backoff)
-                        continue
-                    else:
-                        logger.error(f"Gemini 503 UNAVAILABLE exhausted retries: {err_str}")
-                        return "The AI service is temporarily unavailable due to high demand. Please try again in a few moments."
-                
-                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                    logger.error(f"Gemini API quota exhausted (429): {err_str}")
-                    return "The system is currently experiencing high demand and AI quota is temporarily exhausted. Please try again in a few moments."
-                raise
+        try:
+            rough_char_count = len(str(contents))
+            
+            response = generate_content_with_fallback(
+                model=MODEL_NAME,
+                contents=contents,
+                config=config,
+            )
+            
+            logger.info(
+                f"Gemini/Fallback API request: Iteration {_}, Context size roughly {rough_char_count} chars"
+            )
+        except Exception as e:
+            err_str = str(e)
+            logger.error(f"AI generation failed completely: {err_str}")
+            return "The AI service is temporarily unavailable due to high demand. Please try again in a few moments."
 
         candidate = response.candidates[0]
         parts = candidate.content.parts or []

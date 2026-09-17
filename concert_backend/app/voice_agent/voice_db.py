@@ -246,10 +246,15 @@ def search_events(query: str | None = None, city: str | None = None, temporal_in
         cat_details = ", ".join(f"{c['category']}: INR {c['price_inr']:,.0f}" for c in cats if c.get("price_inr") is not None)
         price_str = f"[{cat_details}]" if cat_details else "price TBA"
         status_tag = " [SOLD OUT]" if r.get("status") == "Sold Out" else ""
+        
+        has_seat_map = _event_has_seat_map(r['event_id'])
+        logger.info(f"DEBUG has_seat_map decision: event_id={r['event_id']}, event_name={r['artist_name']}, has_seat_map={has_seat_map}, source: event_seats table (_event_has_seat_map)")
+        map_str = "true" if has_seat_map else "false"
+        
         lines.append(
             f"{r['artist_name']} at {r['venue_name']}, {r['city']} "
             f"on {r['event_date']} at {r.get('event_time', 'time TBA')}{status_tag} "
-            f"| Tickets: {price_str} (event_id: {r['event_id']})"
+            f"| Tickets: {price_str} (event_id: {r['event_id']}, has_seat_map: {map_str})"
         )
 
     return {
@@ -269,11 +274,19 @@ def get_ticket_categories(event_id: str) -> dict:
     if not result.data:
         return {"success": False, "message": "No ticket categories found for this event."}
 
+    has_seat_map = _event_has_seat_map(event_id)
+    logger.info(f"DEBUG has_seat_map decision: event_id={event_id}, has_seat_map={has_seat_map}, source: event_seats table (_event_has_seat_map)")
+
     lines = [
         f"{r['category']}: ₹{r['price_inr']} ({r['available_seats']} seats left)"
         for r in result.data
     ]
-    return {"success": True, "message": "Available categories:\n" + "\n".join(lines), "categories": result.data}
+    return {
+        "success": True, 
+        "has_seat_map": has_seat_map,
+        "message": f"Event has_seat_map: {str(has_seat_map).lower()}\nAvailable categories:\n" + "\n".join(lines), 
+        "categories": result.data
+    }
 
 
 # ---------------------------------------------------------------------------

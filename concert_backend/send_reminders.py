@@ -9,6 +9,7 @@ load_dotenv()
 
 from app.supabase_client import supabase_admin
 from app.config import GEMINI_API_KEY
+from app.services.ai_service import generate_content_with_fallback
 
 async def main():
     print("Running AI Proactive Reminder Agent...")
@@ -24,8 +25,6 @@ async def main():
     if not GEMINI_API_KEY:
         print("GEMINI_API_KEY is missing.")
         return
-
-    client = genai.Client(api_key=GEMINI_API_KEY)
 
     try:
         # Fetch upcoming events in date range to narrow down
@@ -69,7 +68,7 @@ async def main():
             CRITICAL RULE: You are NOT allowed to invent or hallucinate ANY specific gate numbers, travel conditions, parking details, venue rules, opening times, or setlists. You must ONLY use the factual data provided above. Because specific factual information (like gate numbers or setlists) is not provided in this prompt, you MUST either explicitly state that the information is unavailable, or provide ONLY general exciting preparation advice. Keep it under 2 short paragraphs.
             """
             
-            response = client.models.generate_content(
+            response = generate_content_with_fallback(
                 model='gemini-3.6-flash',
                 contents=prompt,
             )

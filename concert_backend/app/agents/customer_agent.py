@@ -18,9 +18,11 @@ from app.agents import gemini_loop, memory
 from app.agents.customer_tools import FUNCTION_DECLARATIONS, TOOL_HANDLERS as _BASE_HANDLERS
 import json
 import logging
+from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 from app.config import GEMINI_API_KEY
+from app.services.ai_service import generate_content_with_fallback
 import pydantic
 import re
 
@@ -68,8 +70,6 @@ def _is_seat_advice_query(message: str) -> bool:
     return bool(pattern.search(message))
 
 
-_client = genai.Client(api_key=GEMINI_API_KEY)
-
 SYSTEM_PROMPT = """You are a friendly and helpful ticket booking assistant, similar to BookMyShow — covering concerts, movies, comedy shows, music shows, plays, and sports events.
 Your job is to answer user questions using the correct tool. You MUST use a tool whenever the user's question requires information from the database. Do not guess or invent information.
 
@@ -114,7 +114,10 @@ When presenting event search results, YOU MUST format them as a numbered list an
 If the user later asks to book or asks for details about "the first one" or "the second one", and you need the `event_id` to call a tool like book_ticket_transaction, you must FIRST call `search_events` again using the exact same filters as before to retrieve the correct `event_id` from the tool data.
 
 1b. get_available_seats
-Use AFTER get_ticket_categories, before booking, for events with an interactive seat map (has_seat_map=true - a cinema/stadium with named seats like N5). Tells you exactly which seats are open, row by row, so you can ask the user which ones they want instead of just a quantity. If has_seat_map is false, skip this - just ask how many tickets.
+Use AFTER get_ticket_categories, before booking, for events with an interactive seat map. You MUST read the 'has_seat_map' field returned by search_events and get_ticket_categories.
+- If has_seat_map is true, you MUST call this tool to find exactly which seats are open, row by row, so you can ask the user which ones they want instead of just a quantity. Never invent seat numbers; only mention specific seats if returned by this tool.
+- If has_seat_map is false, skip this tool - just ask how many tickets.
+NEVER infer has_seat_map from the event type, venue, ticket categories, memory, or previous AI responses. It is a strict factual field provided in tool outputs.
 
 1c. get_buy_advice
 Use when the user asks about ticket demand, if an event is selling fast, if they should buy now or wait, or how many tickets are left for an event. It returns deterministic metrics (% sold, days left, demand level). Do NOT invent demand metrics. Present the returned deterministic message, and caveat that it is based on current demand, not a guaranteed future sellout prediction.
@@ -352,48 +355,25 @@ If there is no recent context provided, context_needed MUST be false.
     else:
         recent_history = "None (this is the first message)"
 
-    import time
-    max_503_retries = 1
-    
-    for attempt in range(max_503_retries + 1):
-        try:
-            res = _client.models.generate_content(
-                model="gemini-3.1-flash-lite",
-                contents=[
-                    types.Content(role="user", parts=[
-                        types.Part.from_text(text=f"{prompt}\n\nRecent context:\n{recent_history}\n\nUser Message: {message}")
-                    ])
-                ],
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=IntentClassification,
-                )
+    try:
+        res = generate_content_with_fallback(
+            model="gemini-3.1-flash-lite",
+            contents=[
+                types.Content(role="user", parts=[
+                    types.Part.from_text(text=f"{prompt}\n\nRecent context:\n{recent_history}\n\nUser Message: {message}")
+                ])
+            ],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=IntentClassification,
             )
-            data = json.loads(res.text)
-            logger.info(f"Classifier result: {data}")
-            return IntentClassification(**data)
-        except Exception as e:
-            err_str = str(e)
-            if "503" in err_str or "UNAVAILABLE" in err_str:
-                if attempt < max_503_retries:
-                    backoff = 1
-                    logger.warning(f"Intent classifier Gemini 503 UNAVAILABLE. Retrying in {backoff}s (attempt {attempt+1}/{max_503_retries})...")
-                    time.sleep(backoff)
-                    continue
-            
-            logger.error(f"Intent classification failed: {e}")
-            break
-            
-    # Fail safe, not fail closed: we deliberately do NOT default to
-    # EVENT_SEARCH here. Mislabeling a classifier failure as a
-    # confident "EVENT_SEARCH" is exactly how an unknown/general
-    # question used to silently sail through as if it had been
-    # correctly classified. "UNKNOWN" is a distinct, non-committal
-    # value: _run() treats it as "let the general agent (and the
-    # DOMAIN SCOPE hard rule in SYSTEM_PROMPT) handle it" rather than
-    # either blocking a possibly-legitimate booking query or quietly
-    # relabeling it as something it was never actually classified as.
-    return IntentClassification(intent="UNKNOWN", context_needed=True)
+        )
+        data = json.loads(res.text)
+        logger.info(f"Classifier result: {data}")
+        return IntentClassification(**data)
+    except Exception as e:
+        logger.error(f"Intent classification failed: {e}")
+        return IntentClassification(intent="UNKNOWN", context_needed=True)
 
 
 async def _run(effective_user_id: str, session_id: str, name: str, is_admin: bool, message: str, chat_id: str | None) -> str:

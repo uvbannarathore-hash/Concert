@@ -11,13 +11,16 @@ below are carried over from the n8n tool nodes' toolDescription fields
 almost verbatim, since those were already tuned through real usage.
 """
 
-from app.supabase_client import supabase_admin
-from google import genai
-from app.config import GEMINI_API_KEY
-from app.services import embedding_service
+import json
 import logging
+from app.supabase_client import supabase_admin, supabase_anon
+from datetime import datetime
+from google import genai
+from google.genai import types
+from app.config import GEMINI_API_KEY
+from app.services.ai_service import generate_content_with_fallback
+from app.services import embedding_service
 
-_client = genai.Client(api_key=GEMINI_API_KEY)
 logger = logging.getLogger("admin_tools")
 _last_generated_description: str | None = None
 
@@ -315,7 +318,7 @@ Additional Context: {additional_prompt}
 Include the artist name, venue, date, and a brief highlight of the experience. Avoid exaggerated or unverifiable claims unless explicitly provided in the additional context. Return ONLY the description text without any extra wording.
 """
     try:
-        response = _client.models.generate_content(
+        response = generate_content_with_fallback(
             model="gemini-3.6-flash",
             contents=prompt,
         )

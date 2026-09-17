@@ -16,6 +16,9 @@ import uuid
 logger = logging.getLogger("pricing_agent")
 from app.supabase_client import supabase_admin
 from app.config import GEMINI_API_KEY
+from app.services.ai_service import generate_content_with_fallback
+from google.genai import types
+
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 class PricingRecommendation(BaseModel):
@@ -38,53 +41,24 @@ def generate_recommendation(prompt: str) -> dict:
     if not request_id_var.get():
         request_id_var.set(str(uuid.uuid4()))
         
-    # 1. Gemini
-    if GEMINI_API_KEY:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        logger.info("Starting Gemini attempt 1/1")
-        start_time = time.perf_counter()
-        try:
-            response = client.models.generate_content(
-                model='gemini-3.7-flash',
-                contents=prompt,
-                config={
-                    "response_mime_type": "application/json",
-                    "response_schema": PricingRecommendation,
-                    "temperature": 0.2
-                }
-            )
-            latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
-            logger.info("Gemini recommendation generated successfully", extra={"extra_data": {"llm_latency_ms": latency_ms, "model": "gemini-3.7-flash"}})
-            return json.loads(response.text)
-        except Exception as e:
-            latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
-            err_msg = str(e).lower()
-            if "503" in err_msg or "unavailable" in err_msg or "too many requests" in err_msg:
-                logger.warning(f"Gemini unavailable. Skipping retries. Error: {e}", extra={"extra_data": {"llm_latency_ms": latency_ms, "fallback_trigger": "503/429"}})
-            else:
-                logger.warning(f"Gemini failed: {e}", extra={"extra_data": {"llm_latency_ms": latency_ms, "fallback_trigger": "unknown_error"}})
-
-    # 2. Groq fallback
-    if GROQ_API_KEY:
-        logger.info("Switching to Groq fallback")
-        start_time = time.perf_counter()
-        groq_client = Groq(api_key=GROQ_API_KEY)
-        try:
-            groq_prompt = prompt + "\n\nRespond with ONLY a JSON object containing 'suggested_price_inr' (number) and 'justification' (string)."
-            response = groq_client.chat.completions.create(
-                model="openai/gpt-oss-20b",
-                messages=[{"role": "user", "content": groq_prompt}],
-                response_format={"type": "json_object"},
+    start_time = time.perf_counter()
+    try:
+        response = generate_content_with_fallback(
+            model='gemini-3.7-flash',
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=PricingRecommendation,
                 temperature=0.2
             )
-            latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
-            logger.info("Groq recommendation generated successfully", extra={"extra_data": {"llm_latency_ms": latency_ms, "model": "openai/gpt-oss-20b"}})
-            return json.loads(response.choices[0].message.content)
-        except Exception as e:
-            latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
-            logger.error(f"Groq fallback failed: {e}", extra={"extra_data": {"llm_latency_ms": latency_ms}})
-            
-    return None
+        )
+        latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
+        logger.info("Pricing recommendation generated successfully", extra={"extra_data": {"llm_latency_ms": latency_ms}})
+        return json.loads(response.text)
+    except Exception as e:
+        latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
+        logger.error(f"Pricing agent failed completely: {e}", extra={"extra_data": {"llm_latency_ms": latency_ms}})
+        return None
 
 async def main():
     print("Running Dynamic Pricing Suggestion Agent...")
