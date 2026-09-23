@@ -41,8 +41,17 @@ async def main():
         for evt in events_res.data:
             try:
                 # Parse event datetime. Explicitly assuming Asia/Kolkata (IST) for event data.
+                # The DB stores event_time in 24-hour HH:MM format (e.g. "10:00", "19:00").
+                # Fall back to 12-hour "%I:%M %p" in case a legacy value like "07:00 PM" is returned.
                 dt_str = f"{evt['event_date']} {evt['event_time']}"
-                evt_dt_naive = datetime.strptime(dt_str, "%Y-%m-%d %I:%M %p")
+                for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %I:%M %p"):
+                    try:
+                        evt_dt_naive = datetime.strptime(dt_str, fmt)
+                        break
+                    except ValueError:
+                        continue
+                else:
+                    raise ValueError(f"Unrecognised event_time format: {evt['event_time']!r}")
                 ist_tz = timezone(timedelta(hours=5, minutes=30))
                 evt_dt = evt_dt_naive.replace(tzinfo=ist_tz)
                 

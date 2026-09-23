@@ -16,7 +16,6 @@ import ArtistProfilePage from './pages/ArtistProfilePage'
 import VenueProfilePage from './pages/VenueProfilePage'
 import GroupInvitePage from './pages/GroupInvitePage'
 import ChatWidget from './components/ChatWidget'
-import VoiceWidget from './components/VoiceWidget'
 import { api } from './lib/api'
 
 
@@ -90,7 +89,6 @@ export default function App() {
         </Routes>
       </div>
       <ChatWidget />
-      <VoiceWidget />
     </div>
   )
 }

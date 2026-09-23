@@ -31,15 +31,11 @@ from google.genai import types
 from app.supabase_client import supabase_admin
 
 # How many of the most recent messages to include verbatim.
-# Admin sessions get a tighter window — tool responses (event lists,
-# all-bookings tables) are much larger than customer chat messages and
-# consume context budget far faster.
-RECENT_TURNS_CUSTOMER = 16   # ~8 user/assistant pairs
-RECENT_TURNS_ADMIN    = 10   # ~5 pairs  (tool responses are big)
+# We keep this extremely small to stay within strict free-tier LLM token limits (e.g. Groq 8000 TPM).
+RECENT_TURNS_CUSTOMER = 4    # ~2 user/assistant pairs
+RECENT_TURNS_ADMIN    = 4    # ~2 pairs
 
 # How many extra rows to fetch beyond the window to detect overflow.
-# If we get more rows back than RECENT_TURNS_*, we know there's older
-# history worth summarising rather than silently dropping.
 SUMMARY_LOOKAHEAD = 6
 
 
@@ -189,3 +185,31 @@ def save_turn(
             },
         ]
     ).execute()
+
+
+def save_messages(
+    agent: str,
+    user_id: str,
+    session_id: str,
+    messages_list: list[dict],
+) -> None:
+    """
+    Persists a batch of messages.
+    messages_list should contain dicts with 'role' and 'message' keys.
+    """
+    if not messages_list:
+        return
+
+    table = _table_for(agent)
+    user_column = _user_column_for(agent)
+
+    rows = []
+    for m in messages_list:
+        rows.append({
+            user_column: user_id,
+            "session_id": session_id,
+            "role": m["role"],
+            "message": m["message"],
+        })
+
+    supabase_admin.table(table).insert(rows).execute()

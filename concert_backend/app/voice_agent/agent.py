@@ -38,6 +38,7 @@ from livekit.plugins import cartesia, openai, silero
 from app.voice_agent import voice_config as config
 from app.voice_agent import voice_db
 from app.voice_agent.tools import ConcertBookingTools, ConcertBookingToolsWeb
+from app.agents import memory
 
 logger = logging.getLogger("receptionist_agent")
 
@@ -84,6 +85,220 @@ async def _replay_cached_audio(frames: list[rtc.AudioFrame]):
         yield frame
 
 
+
+
+import time
+from livekit.agents._exceptions import APIConnectionError
+
+class CooldownAwareLLM(llm.LLM):
+    """Wraps an LLM instance to track 429s and avoid hammering it while rate-limited."""
+    def __init__(self, inner: llm.LLM, cooldown_seconds: float = 60.0):
+        super().__init__()
+        self._inner = inner
+        self._cooldown_seconds = cooldown_seconds
+        self._cooldown_until: float = 0.0
+
+    @property
+    def label(self) -> str: return self._inner.label
+
+    @property
+    def model(self) -> str: return self._inner.model
+
+    @property
+    def provider(self) -> str: return self._inner.provider
+
+    def _update_metrics(self, *args, **kwargs):
+        self.emit("metrics_collected", *args, **kwargs)
+
+    def _start(self):
+        self._inner.on("metrics_collected", self._update_metrics)
+        
+    def _stop(self):
+        self._inner.off("metrics_collected", self._update_metrics)
+
+    def chat(self, *, chat_ctx, tools=None, **kwargs):
+        if time.time() < self._cooldown_until:
+            logger.warning(f"{self.label} is currently on cooldown due to recent 429.")
+            raise APIConnectionError("LLM on cooldown due to rate limits")
+
+        # Create a clean context for strict providers to avoid 'extra_content' HTTP 400s
+        from livekit.agents.llm import ChatContext, ChatMessage, FunctionCall
+        clean_ctx = ChatContext()
+        
+        is_gemini = "gemini" in getattr(self._inner, "label", "").lower() or "gemini" in str(getattr(self._inner, "model", "")).lower()
+        
+        for item in getattr(chat_ctx, "items", getattr(chat_ctx, "messages", [])):
+            if is_gemini:
+                # Do not strip extra for Gemini as it requires thought_signature
+                clean_ctx._items.append(item)
+                continue
+                
+            if isinstance(item, ChatMessage) and getattr(item, "extra", None):
+                # Pydantic v1/v2 compatibility copy
+                clean_msg = item.copy() if hasattr(item, "copy") else item.model_copy()
+                clean_msg.extra = {}
+                clean_ctx._items.append(clean_msg)
+            elif isinstance(item, FunctionCall) and getattr(item, "extra", None):
+                clean_fc = item.copy() if hasattr(item, "copy") else item.model_copy()
+                clean_fc.extra = {}
+                clean_ctx._items.append(clean_fc)
+            else:
+                clean_ctx._items.append(item)
+
+        stream = self._inner.chat(chat_ctx=clean_ctx, tools=tools, **kwargs)
+        original_aiter = stream.__aiter__
+        
+        async def hooked_aiter():
+            try:
+                async for chunk in original_aiter():
+                    yield chunk
+            except Exception as e:
+                retry_after = None
+                headers = {}
+                if hasattr(e, "response") and hasattr(e.response, "headers"):
+                    headers = e.response.headers
+                elif hasattr(e, "__cause__") and e.__cause__ and hasattr(e.__cause__, "response") and hasattr(e.__cause__.response, "headers"):
+                    headers = e.__cause__.response.headers
+
+                if "429" in str(e) or "Too Many Requests" in str(e) or "quota" in str(e).lower():
+                    if headers:
+                        retry_after_str = headers.get("retry-after")
+                        reset_tokens_str = headers.get("x-ratelimit-reset-tokens")
+                        
+                        if retry_after_str:
+                            try:
+                                retry_after = float(retry_after_str)
+                            except ValueError:
+                                pass
+                        elif reset_tokens_str:
+                            try:
+                                retry_after = float(reset_tokens_str)
+                            except ValueError:
+                                pass
+
+                    cooldown = retry_after if retry_after is not None else self._cooldown_seconds
+                    logger.warning(
+                        f"[GROQ RATE LIMIT] status=429 "
+                        f"remaining_tokens={headers.get('x-ratelimit-remaining-tokens', 'N/A')} "
+                        f"reset_tokens={headers.get('x-ratelimit-reset-tokens', 'N/A')} "
+                        f"retry_after={headers.get('retry-after', 'N/A')} "
+                        f"cooldown={cooldown}"
+                    )
+                    self._cooldown_until = time.time() + cooldown
+                raise e
+
+        stream.__aiter__ = hooked_aiter
+        return stream
+
+
+class SanitizedGeminiLLM(llm.LLM):
+    """
+    Wraps Gemini to intercept the chat context and sanitize any foreign tool calls 
+    (which lack a thought_signature) into neutral conversational text, preventing 
+    strict validation errors on fallback.
+    """
+    def __init__(self, inner: llm.LLM):
+        super().__init__()
+        self._inner = inner
+
+    @property
+    def label(self) -> str:
+        return getattr(self._inner, "label", "SanitizedGemini")
+
+    def _sanitize_ctx(self, chat_ctx: llm.ChatContext) -> llm.ChatContext:
+        from livekit.agents.llm import ChatContext, ChatMessage, FunctionCall, FunctionCallOutput
+        new_ctx = ChatContext()
+        foreign_tool_ids = set()
+        sanitized_call_ids = set()
+        
+        def sanitize_foreign_fc(tc: FunctionCall):
+            is_foreign = True
+            if getattr(tc, "extra", None) and "google" in tc.extra and "thought_signature" in tc.extra["google"]:
+                is_foreign = False
+            
+            if is_foreign:
+                foreign_tool_ids.add(tc.call_id)
+                if tc.call_id not in sanitized_call_ids:
+                    sanitized_call_ids.add(tc.call_id)
+                    new_msg = ChatMessage(
+                        role="assistant", 
+                        content=[f"[System note: I decided to execute tool: {tc.name}]"]
+                    )
+                    new_ctx._items.append(new_msg)
+                    logger.info(f"Sanitized foreign tool call {tc.name} into neutral text for Gemini.")
+                return True
+            return False
+
+        for item in getattr(chat_ctx, "items", []):
+            if isinstance(item, ChatMessage):
+                if getattr(item, "tool_calls", None):
+                    clean_tool_calls = []
+                    for tc in item.tool_calls:
+                        if not sanitize_foreign_fc(tc):
+                            clean_tool_calls.append(tc)
+                    
+                    clean_msg = item.model_copy()
+                    clean_msg.tool_calls = clean_tool_calls if clean_tool_calls else None
+                    
+                    # Check if message is empty after stripping
+                    has_content = False
+                    if clean_msg.content:
+                        if isinstance(clean_msg.content, str):
+                            has_content = bool(clean_msg.content.strip())
+                        elif isinstance(clean_msg.content, list):
+                            has_content = len(clean_msg.content) > 0
+                            
+                    if not clean_msg.tool_calls and not has_content:
+                        continue
+                    
+                    new_ctx._items.append(clean_msg)
+                else:
+                    new_ctx._items.append(item)
+            elif isinstance(item, FunctionCall):
+                if not sanitize_foreign_fc(item):
+                    new_ctx._items.append(item)
+            elif isinstance(item, FunctionCallOutput):
+                if item.call_id in foreign_tool_ids:
+                    new_msg = ChatMessage(
+                        role="user",
+                        content=[f"[System note: Tool '{item.name}' returned: {item.output}]"]
+                    )
+                    new_ctx._items.append(new_msg)
+                    logger.info("Sanitized foreign tool response into neutral text for Gemini.")
+                else:
+                    new_ctx._items.append(item)
+            else:
+                new_ctx._items.append(item)
+                
+        return new_ctx
+
+    def chat(self, *, chat_ctx, tools=None, **kwargs):
+        sanitized_ctx = self._sanitize_ctx(chat_ctx)
+        return self._inner.chat(chat_ctx=sanitized_ctx, tools=tools, **kwargs)
+
+
+class NoRetryFallbackAdapter(llm.LLM):
+    """
+    Wraps the FallbackAdapter to enforce max_retry=0 globally for its outer loop,
+    preventing already-exhausted fallback chains from repeating multiple times.
+    """
+    def __init__(self, adapter: llm.LLM):
+        super().__init__()
+        self.adapter = adapter
+        
+    @property
+    def label(self) -> str:
+        return getattr(self.adapter, "label", "NoRetryFallbackAdapter")
+        
+    def chat(self, *, chat_ctx, tools=None, conn_options=None, **kwargs):
+        from livekit.agents import APIConnectOptions
+        # Ignore outer retries by forcing max_retry to 0
+        no_retry_opts = APIConnectOptions(
+            max_retry=0, 
+            retry_interval=getattr(conn_options, "retry_interval", 0.0), 
+            timeout=getattr(conn_options, "timeout", 10.0)
+        )
+        return self.adapter.chat(chat_ctx=chat_ctx, tools=tools, conn_options=no_retry_opts, **kwargs)
 
 
 def _build_llm_fallback() -> llm.LLM:
@@ -134,241 +349,102 @@ def _build_llm_fallback() -> llm.LLM:
     back here later if one is actually running.
     """
     providers: list[llm.LLM] = []
+    from openai import AsyncOpenAI
 
-    if config.GROQ_API_KEY:
-        logger.info("Fallback Chain: loading Groq providers FIRST (openai/gpt-oss-20b, then openai/gpt-oss-120b)")
+    if config.ENABLE_TOGETHER:
+        logger.info("Fallback Chain: loading Together AI (60k TPM free tier)")
         providers.append(
-            openai.LLM(
-                model="openai/gpt-oss-20b",
-                base_url="https://api.groq.com/openai/v1",
-                api_key=config.GROQ_API_KEY,
+            CooldownAwareLLM(
+                openai.LLM(
+                    model="meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+                    client=AsyncOpenAI(
+                        base_url="https://api.together.xyz/v1",
+                        api_key=config.TOGETHER_API_KEY,
+                        max_retries=0
+                    )
+                ),
+                cooldown_seconds=60.0
             )
         )
+    else:
+        logger.warning("Together AI is disabled in environment config.")
+
+    if config.GROQ_API_KEY:
+        logger.info("Fallback Chain: loading Groq (8k TPM free tier)")
         providers.append(
-            openai.LLM(
-                model="openai/gpt-oss-120b",
-                base_url="https://api.groq.com/openai/v1",
-                api_key=config.GROQ_API_KEY,
+            CooldownAwareLLM(
+                openai.LLM(
+                    model="openai/gpt-oss-20b",
+                    client=AsyncOpenAI(
+                        base_url="https://api.groq.com/openai/v1",
+                        api_key=config.GROQ_API_KEY,
+                        max_retries=0
+                    )
+                ),
+                cooldown_seconds=60.0
             )
         )
 
     if config.GOOGLE_API_KEY:
-        logger.info("Fallback Chain: loading Google Gemini provider")
-        gemini_base_url = (
-            "https://generativelanguage.googleapis.com/v1beta/openai/"
-        )
-
+        logger.info("Fallback Chain: loading Google Gemini (15 RPM free tier)")
         providers.append(
-            openai.LLM(
-                model="gemini-3.7-flash",
-                base_url=gemini_base_url,
-                api_key=config.GOOGLE_API_KEY,
-            )
-        )
-
-        providers.append(
-            openai.LLM(
-                model="gemini-3.5-flash",
-                base_url=gemini_base_url,
-                api_key=config.GOOGLE_API_KEY,
+            SanitizedGeminiLLM(
+                CooldownAwareLLM(
+                    openai.LLM(
+                        model="gemini-3.6-flash",
+                        client=AsyncOpenAI(
+                            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+                            api_key=config.GOOGLE_API_KEY,
+                            max_retries=0
+                        )
+                    ),
+                    cooldown_seconds=60.0
+                )
             )
         )
 
     if not providers:
-        raise ValueError(
-            "No LLM providers initialized. Set GROQ_API_KEY or GOOGLE_API_KEY."
-        )
+        raise ValueError("No LLM providers initialized. Set GROQ_API_KEY or GOOGLE_API_KEY.")
 
-    logger.info(
-        "LLM fallback chain initialized with %d provider(s)",
-        len(providers),
-    )
+    logger.info("LLM fallback chain initialized with %d provider(s)", len(providers))
 
-    return llm.FallbackAdapter(
+    adapter = llm.FallbackAdapter(
         providers,
-        # LATENCY: this was 8.0s - if the primary provider (Groq) is ever
-        # slow to respond or briefly unavailable, the caller would sit in
-        # silence for up to 8 full seconds before the agent even tried
-        # falling back to Gemini. 3.5s still gives a normal Groq response
-        # plenty of room (it's typically sub-second), but fails over much
-        # faster on the turns where it isn't, instead of stalling the whole
-        # conversation.
         attempt_timeout=3.5,
-        max_retry_per_llm=0,
-        retry_interval=0.25,
+        max_retry_per_llm=0,  # Do not retry the same failing provider immediately
+        retry_interval=0,
         retry_on_chunk_sent=False,
     )
+    
+    return NoRetryFallbackAdapter(adapter)
 
 
 def _system_prompt() -> str:
     today_str = datetime.now().strftime("%Y-%m-%d, %A")
 
     return f"""
-You are a professional, friendly voice booking agent named "{config.AGENT_NAME}"
-for {config.PLATFORM_NAME}, a ticket booking service.
+You are "{config.AGENT_NAME}", a voice agent for {config.PLATFORM_NAME}.
+Today: {today_str}.
 
-Today is {today_str}.
+RULES:
+1. ONLY help with finding/booking events on {config.PLATFORM_NAME}.
+2. Use search_events FIRST to find event_ids.
+   - If multiple showtimes exist, ask caller for preferred time.
+   - Status: pass "Sold Out" if asked, "Upcoming" if asking for available, else leave blank.
+   - For follow-ups ("the first one"), re-call search_events with previous filters.
+3. Use get_ticket_categories(event_id) to check prices.
+4. Use get_available_seats(event_id) ONLY for events with seat maps.
+5. Use book_ticket() after user explicitly confirms event, category, and seat count.
+6. Use get_booking_status() for user's existing bookings.
+7. Use check_cancellation_eligibility() BEFORE cancelling. Get confirmation, then use cancel_booking().
+8. Use get_buy_advice() for demand/urgency questions.
+9. Use advise_seats() for seat recommendations.
 
-DOMAIN SCOPE (HARD RULE)
-
-You are NOT a general-purpose voice assistant. You only help with finding
-and booking concerts, movies, comedy shows, music shows, plays, and sports
-events - and their tickets, seats, pricing, demand/availability, bookings,
-and cancellations/refunds - on {config.PLATFORM_NAME}. If the caller asks
-something with no connection to that (general trivia/knowledge, coding,
-math, weather, jokes, news, or any other unrelated topic), do NOT answer
-it, even briefly, and do NOT call ANY tool for it - not search_events, not
-any other tool. Briefly say that's outside what you can help with here,
-and invite them back to finding or booking an event. Do this even if
-you're confident you know the answer. This rule overrides every other
-instruction below when there's a conflict.
-
-YOUR ONLY ROLE
-
-1. Find events.
-   Use search_events with the artist/event name and/or city.
-   This applies to EVERY event-related question, including generic ones
-   like "what's upcoming" or "show me events" - not only when you think
-   you'll need an event_id for booking. NEVER answer from memory or general
-   knowledge, even for a quick informal-sounding list. If you haven't
-   called search_events in THIS turn (or a very recent prior turn covering
-   the same city/query), call it before saying anything about specific
-   events, dates, or venues.
-
-   IMPORTANT - multiple showtimes: the same movie/artist can appear MORE
-   THAN ONCE in search_events results at the exact same venue and date,
-   differing only by the time (e.g. a 7pm show and a separate 9pm show
-   are different event_ids with their own independent categories, prices,
-   and seats). Each result includes its time - read it carefully. If the
-   caller names a specific time ("the 9pm show"), you must use the
-   event_id matching that exact time, never just the first or only one
-   you happen to see for that movie/venue/date. If the caller hasn't said
-   a time and more than one showtime exists for what they're asking
-   about, ask which time before quoting any price or category - never
-   guess.
-
-   You can help users find and book all supported event types, including:
-   - Concerts
-   - Music shows
-   - Movies
-   - Comedy shows
-   - Plays and theatre shows
-   - Sports events
-   - Other events listed in the event database
-
-   search_events also takes an optional status filter. Leave it unset for a
-   normal search (already includes both upcoming and sold-out events). If
-   the caller specifically asks which events are "sold out", pass status
-   "Sold Out". If they specifically ask for events that are NOT sold out
-   ("what's still available", "upcoming events" said to mean available
-   ones), pass status "Upcoming".
-
-   ORDINAL / FOLLOW-UP REFERENCES: when the caller refers to a previous
-   result by position ("the second one", "the first movie", "that one") or
-   asks a follow-up about it ("how many seats are left for that", "should I
-   buy the first one now"), that refers to the position in the MOST RECENT
-   list of events YOU read out or a search_events result you got back in
-   this call - never an older, unrelated search from earlier in the
-   conversation. Re-call search_events with the same query/city/temporal
-   filters you used for that list to get a fresh, correct event_id - never
-   reuse or guess an event_id from memory, since availability can change
-   between turns. NEVER invent an event_id for an ordinal reference. If
-   it's genuinely unclear which event or which earlier list the caller
-   means, ask them to clarify instead of picking one.
-
-2. Check ticket categories, prices and availability.
-   Use get_ticket_categories with the event_id returned by search_events.
-
-3. Book tickets.
-   Collect the event_id, exact ticket category, seat count, and all
-   information required by the active booking tool.
-   Always confirm the event, category and seat count before booking.
-
-4. Check existing booking status using get_booking_status.
-   You can filter by time period (e.g. "this month", "next week", "in
-   December") using its temporal_intent/specific_month parameters - use
-   the exact same TODAY/TOMORROW/THIS_WEEK/THIS_WEEKEND/NEXT_WEEK/
-   NEXT_WEEKEND/THIS_MONTH/NEXT_MONTH values as search_events.
-
-5. Check cancellation eligibility before ever cancelling anything.
-   Use check_cancellation_eligibility with the exact booking_id. Tell the
-   caller, briefly: whether cancellation is allowed, the eligible amount,
-   refund percentage, cancellation fee, and the expected refund amount.
-   Then explicitly ask for confirmation (e.g. "Should I go ahead and
-   cancel it?") and wait for a clear answer before doing anything else.
-
-6. Cancel a booking.
-   Only call cancel_booking after the caller has clearly confirmed with
-   words like "yes", "confirm", "cancel it", or "go ahead" - and only
-   after step 5 already happened in this conversation. NEVER cancel just
-   because the caller asked IF they can cancel, or asked what the refund
-   would be - those are check_cancellation_eligibility-only questions.
-   After cancelling, report the refund status accurately from the tool
-   result: if the refund is pending or still processing, say so - never
-   say the refund is complete unless the tool result says so.
-
-7. Demand / buy-now-vs-wait.
-   Use get_buy_advice for any demand/urgency question: "is this selling
-   fast", "should I buy now or wait", "how many tickets are left", "is
-   this in high demand", "are seats running out", or "should I hurry and
-   book now". Never estimate this yourself or claim an event will
-   definitely sell out - only report what the tool returns.
-
-8. Seat recommendations.
-   Use advise_seats for requests like "cheapest seats", "cheapest
-   tickets", "premium seats", "3 seats together", "VIP seats under 2000",
-   "best value", or "which seats should I get". It only returns seats
-   that are actually available right now - never invent seat numbers. If
-   the caller asks for something it doesn't support (like "best view" or
-   "closest to the stage"), briefly say you can only recommend by price,
-   category, quantity, and seat adjacency.
-
-9. Hosted/submitted shows (authenticated callers only).
-   Use get_user_hosted_shows if the caller asks about shows they've
-   hosted or submitted themselves. Never invent or infer this from
-   memory. If this tool isn't available in the current session, briefly
-   say that's only available for logged-in accounts.
-
-BOOKING SAFETY
-
-- Never invent event names, event IDs, prices, seat availability or booking IDs.
-- Always use the tools to verify current data.
-- Only show and recommend upcoming events. Never show or book an event whose
-  event date has already passed.
-- Never call book_ticket until the user has explicitly confirmed the final
-  event, category and number of seats.
-- Explain that a booking is Pending until payment is completed through the
-  payment/SMS flow when that is what the booking tool reports.
-- If a tool reports failure, clearly explain the returned reason.
-- Tool results include an internal event_id for EACH event (e.g.
-  "event_id: EVT01"). This is for YOUR internal use only when calling
-  get_ticket_categories/book_ticket - the caller never needs to hear it and
-  cannot use it for anything. NEVER say the event_id out loud. Refer to
-  events only by artist/event name, venue, and date when speaking to the
-  caller (e.g. "Arijit Singh at Mumbai Stadium on 15 Dec" - never
-  "EVTARIJIT1512").
-- A booking_id IS meant for the caller (they may need it to check status or
-  cancel later), so that one is fine to speak - this rule only applies to
-  event_id.
-
-CONVERSATION STYLE
-
-- Keep responses concise and natural for voice.
-- HARD LIMIT: never speak more than 25 words in a single turn.
-- TTS is billed per character spoken, so say only the most important
-  information and let the caller ask follow-up questions.
-- Do not give long explanations unless necessary.
-- Stay strictly focused on finding and booking tickets for concerts, movies,
-  comedy shows, music shows, plays, sports events, and other supported events.
-- Do not claim to browse the internet or discuss internal implementation.
-- If asked about unrelated topics, briefly redirect to event and ticket booking.
-
-LANGUAGE
-
-- Reply in the same language used by the caller.
-- For Hindi, reply in Hindi/Devanagari.
-- For English, reply in English.
-- For Hinglish, naturally match the user's Hinglish style.
+CONSTRAINTS:
+- NEVER invent data (event names, prices, seats).
+- Maximum 25 words per turn. Keep it concise.
+- Never read out the internal event_id.
+- Reply in the caller's language (English, Hindi, Hinglish).
 """.strip()
 
 class ConcertVoiceAgent(Agent):
@@ -380,6 +456,7 @@ class ConcertVoiceAgent(Agent):
         instructions: str,
         tools: list[Any],
         greeting: str,
+        chat_ctx: llm.ChatContext | None = None,
         greeting_audio: list[rtc.AudioFrame] | None = None,
         tts_english=None,
         tts_hindi=None,
@@ -387,6 +464,7 @@ class ConcertVoiceAgent(Agent):
         super().__init__(
             instructions=instructions,
             tools=tools,
+            chat_ctx=chat_ctx,
         )
         self._greeting = greeting
         self._greeting_audio = greeting_audio
@@ -395,6 +473,12 @@ class ConcertVoiceAgent(Agent):
 
     async def on_enter(self) -> None:
         logger.info("Agent entered the LiveKit session; delivering greeting.")
+        
+        # Suppress greeting if there's already conversation history
+        history_msgs = [m for m in self.chat_ctx.messages() if m.role in ("user", "assistant")]
+        if len(history_msgs) > 0:
+            logger.info("Existing conversation history found, skipping initial greeting.")
+            return
 
         if self._greeting_audio:
             # Cached path: no TTS call, just replays pre-rendered frames.
@@ -535,11 +619,20 @@ async def _identify_participant(ctx: JobContext):
 
 
 async def entrypoint(ctx: JobContext):
+    logger.info("🔥 AGENT ENTRYPOINT STARTED")
+    logger.info(f"Job ID: {ctx.job.id}")
+    if getattr(ctx, "room", None):
+        logger.info(f"Room: {ctx.room.name}")
+    else:
+        logger.info("Room: None (Not available in ctx yet)")
+
     # Connect as early as possible.
     await ctx.connect()
     
-    # Tie the session to the LiveKit room name for observability
-    session_id_var.set(ctx.room.name)
+    actual_session_id = ctx.room.name.removeprefix("voice-")
+    
+    # Tie the session to the actual session_id for observability
+    session_id_var.set(actual_session_id)
     
     logger.info(
         "Incoming call/website connection request. Job ID: %s",
@@ -681,10 +774,31 @@ async def entrypoint(ctx: JobContext):
         logger.exception("Greeting pre-render failed — falling back to live TTS for this session.")
         greeting_audio = None
 
+    # Load existing text chat history
+    from app.agents import memory
+    history_turns = memory.load_history(
+        agent="customer",
+        user_id=website_user_id if participant_type == "website" else caller_phone,
+        session_id=actual_session_id
+    )
+    
+    initial_ctx = llm.ChatContext()
+    initial_ctx.add_message(
+        role="system",
+        content=instructions,
+    )
+    for turn in history_turns:
+        normalized_role = "assistant" if turn.role == "model" else turn.role
+        if normalized_role in ("developer", "system", "user", "assistant"):
+            initial_ctx.add_message(role=normalized_role, content=turn.parts[0].text)
+
+    initial_msg_count = len(initial_ctx.messages())
+    
     agent = ConcertVoiceAgent(
         instructions=instructions,
         tools=_tool_list(toolset),
         greeting=greeting,
+        chat_ctx=initial_ctx,
         greeting_audio=greeting_audio,
         tts_english=tts_english,
         tts_hindi=tts_hindi,
@@ -698,7 +812,7 @@ async def entrypoint(ctx: JobContext):
         max_tool_steps=5,
     )
 
-    session_id = ctx.room.name
+    session_id = actual_session_id
     session_start = datetime.now()
     transcript_messages: list[dict[str, str]] = []
 
@@ -824,6 +938,28 @@ async def entrypoint(ctx: JobContext):
             )
 
         try:
+            # Sync Voice Turns to Text DB
+            if hasattr(session, 'chat_ctx') or hasattr(agent, 'chat_ctx'):
+                target_ctx = getattr(agent, 'chat_ctx', None) or session.chat_ctx
+                new_messages = target_ctx.messages()[initial_msg_count:]
+                
+                # Sanitize: only final user/assistant texts, no tool stuff
+                valid_inserts = []
+                for m in new_messages:
+                    if m.role in ("user", "assistant") and isinstance(m, llm.ChatMessage) and m.content:
+                        # Extract the string text (content can be str or list of ChatContent)
+                        if isinstance(m.content, str):
+                            valid_inserts.append({"role": m.role, "message": m.content})
+                        elif isinstance(m.content, list):
+                            text_parts = [p.text for p in m.content if hasattr(p, 'text') and p.text]
+                            if text_parts:
+                                valid_inserts.append({"role": m.role, "message": " ".join(text_parts)})
+                                
+                if valid_inserts:
+                    uid = website_user_id if website_user_id else caller_phone
+                    memory.save_messages("customer", uid, session_id, valid_inserts)
+                    logger.info("Saved %d new voice messages to chat_history.", len(valid_inserts))
+                    
             voice_db.log_call_session(
                 session_id=session_id,
                 caller_phone=caller_phone,
@@ -867,13 +1003,10 @@ async def entrypoint(ctx: JobContext):
 if __name__ == "__main__":
     cli.run_app(
         WorkerOptions(
+            agent_name="receptionist",
             entrypoint_fnc=entrypoint,
             num_idle_processes=0,
-            load_threshold=0.95,        # was implicit 0.7 — was rejecting
-                                          # jobs at 0.72 load, which is barely
-                                          # above idle. Raising this stops
-                                          # false "full capacity" rejections,
-                                          # though it won't stop an actual OOM.
+            # load_threshold is removed to prevent false capacity rejections during local dev spikes
             job_memory_warn_mb=400,      # logs a warning before it gets fatal,
                                           # instead of a silent OOM-kill —
                                           # gives you real numbers to see how

@@ -43,7 +43,7 @@ function clearSession() {
   localStorage.removeItem('email')
 }
 
-function getSessionId() {
+export function getSessionId() {
   // One session_id per browser tab session (short-term memory continuity).
   // A fresh one is generated on each new login, never reused across users.
   let sid = sessionStorage.getItem('chat_session_id')
@@ -224,8 +224,8 @@ export const api = {
     request(`/wishlist/${eventId}`, { method: 'DELETE', auth: true }),
 
   // Issues a short-lived LiveKit token for the website speech-to-speech
-  // voice booking assistant (see VoiceWidget.jsx).
-  getVoiceToken: () => request('/voice/token', { method: 'POST', auth: true }),
+  // voice booking assistant (see ChatWidget.jsx).
+  getVoiceToken: (sessionId) => request('/voice/token', { method: 'POST', auth: true, body: { session_id: sessionId } }),
 
   // "List Your Show" - submits an event for admin review. Uses raw fetch
   // (not the request() helper) since this is multipart/form-data - the
