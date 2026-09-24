@@ -50,6 +50,68 @@ def _get_ticket_or_404(event_id: str, category: str):
         raise HTTPException(status_code=404, detail="Ticket category not found for this event")
     return ticket.data[0]
 
+def _issue_group_booking_reward(booking_id: str):
+    try:
+        session_res = supabase_admin.table("group_booking_sessions").select("id, initiator_user_id").eq("booking_id", booking_id).execute()
+        if not session_res.data:
+            return
+            
+        session = session_res.data[0]
+        session_id = session["id"]
+        initiator_user_id = session["initiator_user_id"]
+        
+        # Abuse Guard 1: Must have at least one valid accepted participant
+        invites_res = supabase_admin.table("group_booking_invites").select("id").eq("group_session_id", session_id).eq("status", "accepted").not_.is_("invited_user_id", "null").limit(1).execute()
+        if not invites_res.data:
+            return
+            
+        # Abuse Guard 2: Rate limit (max 3 rewards per 30 days)
+        from datetime import datetime, timedelta, timezone
+        now_utc = datetime.now(timezone.utc)
+        thirty_days_ago = (now_utc - timedelta(days=30)).isoformat()
+        
+        recent_rewards = supabase_admin.table("coupons").select("id", count="exact").eq("owner_user_id", initiator_user_id).not_.is_("source_group_session_id", "null").gte("created_at", thirty_days_ago).execute()
+        if recent_rewards.count is not None and recent_rewards.count >= 3:
+            return
+        
+        coupon_code = f"GROUP{session_id[:8].upper()}"
+        valid_until = (now_utc + timedelta(days=90)).isoformat()
+        
+        try:
+            supabase_admin.table("coupons").insert({
+                "code": coupon_code,
+                "discount_type": "percentage",
+                "discount_value": 10,
+                "max_discount_amount": 500,
+                "max_uses": 1,
+                "max_uses_per_user": 1,
+                "valid_until": valid_until,
+                "is_active": True,
+                "owner_user_id": initiator_user_id,
+                "source_group_session_id": session_id
+            }).execute()
+        except Exception as e:
+            # Idempotency: specifically check Postgrest 23505 (unique_violation)
+            e_str = str(e)
+            if "23505" in e_str and ("coupons_code_key" in e_str or "coupons_source_group_session_id_key" in e_str or "unique constraint" in e_str):
+                return
+            raise e
+            
+        # Notify user
+        from app.services.email_service import send_generic_notification
+        user_res = supabase_admin.table("users").select("email, telegram_chat_id, notify_telegram_for_website").eq("user_id", initiator_user_id).execute()
+        if user_res.data:
+            user = user_res.data[0]
+            telegram_chat_id = user.get("telegram_chat_id") if user.get("notify_telegram_for_website") else None
+            
+            send_generic_notification(
+                email=user.get("email"),
+                telegram_chat_id=telegram_chat_id,
+                subject="🎉 Group Booking Confirmed!",
+                message=f"Your group booking is confirmed! As a thank you for organizing, here is a 10% off coupon (up to ₹500) for your next booking: {coupon_code}\n\nValid for 90 days."
+            )
+    except Exception as e:
+        logger.error(f"Failed to issue group booking reward for booking {booking_id}: {e}")
 
 class CreateOrderRequest(BaseModel):
     event_id: str
@@ -103,6 +165,9 @@ def create_order(request: Request, payload: CreateOrderRequest, current_user: di
             raise HTTPException(status_code=400, detail="Coupon expired")
         if coupon.get("event_id") and coupon["event_id"] != payload.event_id:
             raise HTTPException(status_code=400, detail="Coupon not valid for this event")
+            
+        if coupon.get("owner_user_id") and coupon["owner_user_id"] != current_user["user_id"]:
+            raise HTTPException(status_code=400, detail="Coupon is not valid for this user")
             
         if coupon["discount_type"] == "percentage":
             discount_amount = int(round(amount_inr * float(coupon["discount_value"]) / 100))
@@ -278,6 +343,10 @@ def create_order_seats(request: Request, payload: CreateSeatOrderRequest, curren
         if coupon.get("event_id") and coupon["event_id"] != payload.event_id:
             supabase_admin.table("bookings").update({"status": "Cancelled", "payment_status": "Cancelled"}).eq("booking_id", data["booking_id"]).execute()
             raise HTTPException(status_code=400, detail="Coupon not valid for this event")
+            
+        if coupon.get("owner_user_id") and coupon["owner_user_id"] != current_user["user_id"]:
+            supabase_admin.table("bookings").update({"status": "Cancelled", "payment_status": "Cancelled"}).eq("booking_id", data["booking_id"]).execute()
+            raise HTTPException(status_code=400, detail="Coupon is not valid for this user")
             
         if coupon["discount_type"] == "percentage":
             discount_amount = int(round(amount_inr * float(coupon["discount_value"]) / 100))
@@ -460,6 +529,8 @@ def verify_payment(payload: VerifyPaymentRequest, current_user: dict = Depends(g
     supabase_admin.table("group_booking_sessions").update(
         {"status": "booked"}
     ).eq("booking_id", payload.booking_id).execute()
+    
+    _issue_group_booking_reward(payload.booking_id)
 
     amount = booking_row.get("total_amount")
     if amount is None:
@@ -599,6 +670,8 @@ async def razorpay_webhook(request: Request):
             supabase_admin.table("group_booking_sessions").update(
                 {"status": "booked"}
             ).eq("booking_id", booking_row["booking_id"]).execute()
+            
+            _issue_group_booking_reward(booking_row["booking_id"])
 
             # Idempotent insert into payments: only create a new row if this razorpay_payment_id hasn't been recorded yet.
             existing_payment = (

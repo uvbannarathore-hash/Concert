@@ -57,12 +57,22 @@ export default function ChatWidget() {
   const [isOpen, setIsOpen] = useState(false)
   const [mode, setMode] = useState('text') // 'text' or 'voice'
 
-  const [messages, setMessages] = useState([
-    {
-      role: 'assistant',
-      text: "Hey! I'm your AI booking assistant. Ask me to find concerts, check seat availability, view your tickets, or handle reservation questions!",
-    },
-  ])
+  const [messages, setMessages] = useState(() => {
+    const saved = sessionStorage.getItem('chat_widget_messages')
+    if (saved) {
+      try { return JSON.parse(saved) } catch (e) {}
+    }
+    return [
+      {
+        role: 'assistant',
+        text: "Hey! I'm your AI booking assistant. Ask me to find concerts, check seat availability, view your tickets, or handle reservation questions!",
+      },
+    ]
+  })
+
+  useEffect(() => {
+    sessionStorage.setItem('chat_widget_messages', JSON.stringify(messages))
+  }, [messages])
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
@@ -334,7 +344,7 @@ export default function ChatWidget() {
       {isOpen && (
         <div
           ref={drawerRef}
-          className="fixed bottom-24 right-6 z-50 w-96 h-[520px] max-w-[calc(100vw-48px)] glass-card bg-stage/95 rounded-2xl border border-white/[0.08] shadow-2xl p-4 flex flex-col justify-between animate-scale-in backdrop-blur-xl"
+          className="fixed bottom-24 right-6 z-50 w-96 h-[520px] max-h-[calc(100vh-180px)] max-w-[calc(100vw-48px)] glass-card bg-stage/95 rounded-2xl border border-white/[0.08] shadow-2xl p-4 flex flex-col justify-between animate-scale-in backdrop-blur-xl"
         >
           {/* Header */}
           <div className="border-b border-white/[0.04] pb-3 mb-3 flex items-center justify-between">

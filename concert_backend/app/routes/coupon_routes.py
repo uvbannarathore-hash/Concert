@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
 from app.supabase_client import supabase_admin
+from app.auth import get_current_user
 from datetime import datetime, timezone
 import math
 
@@ -17,7 +18,7 @@ def get_current_utc():
     return datetime.now(timezone.utc)
 
 @router.post("/validate")
-def validate_coupon(payload: ValidateCouponRequest):
+def validate_coupon(payload: ValidateCouponRequest, current_user: dict = Depends(get_current_user)):
     # 1. Fetch the ticket price securely from the backend
     ticket_category = supabase_admin.table("ticket_categories").select("price_inr").eq("event_id", payload.event_id).eq("category", payload.category).execute()
     if not ticket_category.data:
@@ -54,6 +55,9 @@ def validate_coupon(payload: ValidateCouponRequest):
             
     if coupon.get("event_id") and coupon["event_id"] != payload.event_id:
         raise HTTPException(status_code=400, detail="This coupon is not valid for this event")
+        
+    if coupon.get("owner_user_id") and coupon["owner_user_id"] != current_user["user_id"]:
+        raise HTTPException(status_code=400, detail="This coupon is not valid for this user")
         
     # 4. Calculate discount
     discount_value = float(coupon["discount_value"])

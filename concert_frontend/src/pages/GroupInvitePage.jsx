@@ -70,6 +70,7 @@ export default function GroupInvitePage() {
   const isCancelled = invite.session_status === 'cancelled';
   
   const canRespond = invite.session_status === 'collecting_responses' && invite.status === 'pending';
+  const isLoggedIn = api.isLoggedIn();
 
   return (
     <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center p-6 pt-24">
@@ -121,22 +122,34 @@ export default function GroupInvitePage() {
               <p className="text-center text-zinc-400 text-sm mb-4">
                 Will you join? Let {invite.initiator_name} know!
               </p>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <button
-                  onClick={() => handleResponse('accept')}
-                  disabled={submitting}
-                  className="w-full py-4 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-                >
-                  {submitting ? 'Updating...' : 'I\'m In! 🤘'}
-                </button>
-                <button
-                  onClick={() => handleResponse('decline')}
-                  disabled={submitting}
-                  className="w-full py-4 rounded-xl font-bold text-white bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-900 transition-all disabled:opacity-50"
-                >
-                  {submitting ? 'Updating...' : 'Can\'t make it'}
-                </button>
-              </div>
+              {!isLoggedIn ? (
+                <div className="text-center">
+                  <Link
+                    to="/login"
+                    onClick={() => sessionStorage.setItem('pendingRedirect', window.location.pathname)}
+                    className="w-full inline-block py-4 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-500 transition-all text-center"
+                  >
+                    Log in to respond
+                  </Link>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <button
+                    onClick={() => handleResponse('accept')}
+                    disabled={submitting}
+                    className="w-full py-4 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    {submitting ? 'Updating...' : 'I\'m In! 🤘'}
+                  </button>
+                  <button
+                    onClick={() => handleResponse('decline')}
+                    disabled={submitting}
+                    className="w-full py-4 rounded-xl font-bold text-white bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-900 transition-all disabled:opacity-50"
+                  >
+                    {submitting ? 'Updating...' : 'Can\'t make it'}
+                  </button>
+                </div>
+              )}
             </>
           )}
 

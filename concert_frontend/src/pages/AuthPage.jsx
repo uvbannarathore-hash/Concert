@@ -42,7 +42,13 @@ export default function AuthPage() {
         setMode('login')
       } else {
         await api.login(email, password)
-        navigate('/')
+        const pendingRedirect = sessionStorage.getItem('pendingRedirect')
+        if (pendingRedirect) {
+          sessionStorage.removeItem('pendingRedirect')
+          navigate(pendingRedirect, { replace: true })
+        } else {
+          navigate('/')
+        }
       }
     } catch (err) {
       setError(err.message)

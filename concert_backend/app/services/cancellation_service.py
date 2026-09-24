@@ -562,6 +562,16 @@ def initiate_cancellation(booking_id: str, user_id: str) -> dict:
             }
         return {"success": False, "message": "Unable to finalize cancellation. Please retry."}
 
+    # Amendment 5: Reward Revocation
+    # If this was a group booking that issued a reward, revoke it.
+    try:
+        session_res = supabase_admin.table("group_booking_sessions").select("id").eq("booking_id", booking_id).execute()
+        if session_res.data:
+            session_id = session_res.data[0]["id"]
+            supabase_admin.table("coupons").update({"is_active": False}).eq("source_group_session_id", session_id).execute()
+    except Exception as e:
+        print(f"Failed to revoke group booking reward for {booking_id}: {e}")
+
     return {
         "success": True,
         "message": f"Booking {booking_id} cancelled",

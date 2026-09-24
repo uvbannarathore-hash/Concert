@@ -544,6 +544,7 @@ def initiate_group_booking(user_id: str, event_id: str, category: str, seats: in
         return {"success": False, "message": "Failed to create group session."}
         
     session_id = sess_res.data[0]["id"]
+    share_token = sess_res.data[0].get("share_token", "")
     
     # Create invites and send emails
     event_res = supabase_admin.table("events").select("event_name:artist_name").eq("event_id", event_id).execute()
@@ -552,16 +553,35 @@ def initiate_group_booking(user_id: str, event_id: str, category: str, seats: in
     for em in unique_emails:
         inv_res = supabase_admin.table("group_booking_invites").insert({
             "group_session_id": session_id,
-            "friend_email": em
+            "friend_email": em,
+            "email_status": "pending"
         }).execute()
         if inv_res.data:
             invite_id = inv_res.data[0]["id"]
-            send_group_invite_email(invite_id, em, initiator_name, event_name)
+            try:
+                send_group_invite_email(invite_id, em, initiator_name, event_name)
+                supabase_admin.table("group_booking_invites").update({
+                    "email_status": "sent",
+                    "email_attempts": 1,
+                    "last_email_attempt_at": datetime.now(timezone.utc).isoformat()
+                }).eq("id", invite_id).execute()
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Email failed for {em}: {e}")
+                supabase_admin.table("group_booking_invites").update({
+                    "email_status": "failed", 
+                    "email_error": str(e),
+                    "email_attempts": 1,
+                    "last_email_attempt_at": datetime.now(timezone.utc).isoformat()
+                }).eq("id", invite_id).execute()
             
+    import os
+    share_url = f"{os.getenv('FRONTEND_URL', 'http://localhost:5173')}/group-join/{share_token}"
     return {
         "success": True, 
         "session_id": session_id,
-        "message": f"Group booking initiated. Invitations sent to {len(unique_emails)} friends. The invitations will expire in 30 minutes."
+        "share_url": share_url,
+        "message": f"Group booking initiated. Invitations sent to {len(unique_emails)} friends. The invitations will expire in 30 minutes. You can also share this link: {share_url}"
     }
 
 def _is_valid_uuid(val: str) -> bool:
@@ -597,6 +617,7 @@ def check_group_booking_status(user_id: str, session_id: str) -> dict:
     declined = len([i for i in invites if i["status"] == "declined"])
     pending = len([i for i in invites if i["status"] == "pending"])
     
+    import os
     response = {
         "success": True,
         "session_id": session_id,
@@ -605,7 +626,16 @@ def check_group_booking_status(user_id: str, session_id: str) -> dict:
         "accepted": accepted,
         "declined": declined,
         "pending": pending,
-        "is_expired": session["status"] == "expired"
+        "is_expired": session["status"] == "expired",
+        "share_url": f"{os.getenv('FRONTEND_URL', 'http://localhost:5173')}/group-join/{session.get('share_token', '')}",
+        "friends_status": [
+            {
+                "email": i["friend_email"],
+                "response": i["status"],
+                "email_status": i.get("email_status", "unknown"),
+                "email_error": i.get("email_error")
+            } for i in invites
+        ]
     }
     
     if session.get("booking_id"):

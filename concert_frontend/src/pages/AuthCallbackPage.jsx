@@ -32,7 +32,13 @@ export default function AuthCallbackPage() {
           if (!profile.phone || !profile.city || !profile.address) {
             navigate('/complete-profile', { replace: true })
           } else {
-            navigate('/', { replace: true })
+            const pendingRedirect = sessionStorage.getItem('pendingRedirect')
+            if (pendingRedirect) {
+              sessionStorage.removeItem('pendingRedirect')
+              navigate(pendingRedirect, { replace: true })
+            } else {
+              navigate('/', { replace: true })
+            }
           }
         } catch (profileError) {
           // If profile fetch fails, assume incomplete or error

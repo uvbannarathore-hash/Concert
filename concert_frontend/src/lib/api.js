@@ -354,8 +354,9 @@ export const api = {
 
   // Group Bookings
   getGroupInvite: (inviteId) => request(`/group-invite/${inviteId}`),
-  acceptGroupInvite: (inviteId) => request(`/group-invite/${inviteId}/accept`, { method: 'POST' }),
-  declineGroupInvite: (inviteId) => request(`/group-invite/${inviteId}/decline`, { method: 'POST' }),
+  acceptGroupInvite: (inviteId) => request(`/group-invite/${inviteId}/accept`, { method: 'POST', auth: true }),
+  declineGroupInvite: (inviteId) => request(`/group-invite/${inviteId}/decline`, { method: 'POST', auth: true }),
+  claimGroupInvite: (shareToken) => request(`/group-invite/claim/${shareToken}`, { method: 'POST', auth: true }),
 }
 
 export function getPublicPassUrl(bookingId) {

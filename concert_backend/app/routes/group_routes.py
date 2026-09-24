@@ -51,10 +51,20 @@ def get_invite_details(invite_id: str):
     user_res = supabase_admin.table("users").select("name").eq("user_id", session["initiator_user_id"]).execute()
     initiator_name = user_res.data[0].get("name", "A friend") if user_res.data else "A friend"
     
+    # Mask email for privacy (e.g., y***0@gmail.com)
+    friend_email = invite["friend_email"]
+    masked_email = friend_email
+    if "@" in friend_email:
+        name, domain = friend_email.split("@", 1)
+        if len(name) > 2:
+            masked_email = f"{name[0]}***{name[-1]}@{domain}"
+        else:
+            masked_email = f"***@{domain}"
+
     return {
         "invite_id": invite["id"],
         "status": invite["status"],
-        "friend_email": invite["friend_email"],
+        "friend_email": masked_email,
         "initiator_name": initiator_name,
         "session_status": session["status"],
         "event_name": event.get("event_name"),
@@ -90,7 +100,7 @@ def _notify_initiator(session_id: str, message: str):
         )
 
 @router.post("/{invite_id}/accept")
-def accept_invite(invite_id: str):
+def accept_invite(invite_id: str, current_user: dict = Depends(get_current_user)):
     invite_res = supabase_admin.table("group_booking_invites").select("*, group_booking_sessions(*)").eq("id", invite_id).execute()
     if not invite_res.data:
         raise HTTPException(status_code=404, detail="Invite not found")
@@ -106,21 +116,35 @@ def accept_invite(invite_id: str):
         raise HTTPException(status_code=400, detail=f"Cannot accept invite. Session is currently: {session['status']}")
         
     if invite["status"] == "accepted":
+        # Even if accepted, if the user was just bound, update their user_id
+        if not invite.get("invited_user_id"):
+             supabase_admin.table("group_booking_invites").update({
+                 "invited_user_id": current_user["user_id"],
+                 "friend_email": current_user["email"]
+             }).eq("id", invite_id).execute()
         return {"status": "success", "message": "Already accepted."}
         
+    # Check if the user already has an accepted invite for this session
+    existing_invites = supabase_admin.table("group_booking_invites").select("id").eq("group_session_id", session["id"]).eq("invited_user_id", current_user["user_id"]).neq("id", invite_id).execute()
+    if existing_invites.data:
+         raise HTTPException(status_code=400, detail="You already have another invite for this group booking.")
+         
     # Update invite
     now = datetime.now(timezone.utc).isoformat()
     supabase_admin.table("group_booking_invites").update({
         "status": "accepted",
-        "responded_at": now
+        "responded_at": now,
+        "invited_user_id": current_user["user_id"],
+        "friend_email": current_user["email"]  # allow mismatch, use auth email
     }).eq("id", invite_id).execute()
     
-    # Check if all invites are accepted
-    all_invites = supabase_admin.table("group_booking_invites").select("status").eq("group_session_id", session["id"]).execute()
-    pending = [i for i in all_invites.data if i["status"] != "accepted" and i["id"] != invite_id]
+    # Check if we have reached the required number of accepted friends
+    all_invites = supabase_admin.table("group_booking_invites").select("id, status").eq("group_session_id", session["id"]).execute()
+    accepted_count = sum(1 for i in all_invites.data if i["status"] == "accepted" or i["id"] == invite_id)
+    target_count = session["total_seats"] - 1
     
-    if not pending:
-        # All accepted, mark ready!
+    if accepted_count >= target_count:
+        # We have enough accepted friends, mark ready!
         supabase_admin.table("group_booking_sessions").update({
             "status": "ready"
         }).eq("id", session["id"]).execute()
@@ -136,7 +160,7 @@ def accept_invite(invite_id: str):
     return {"status": "success", "message": "Invite accepted."}
 
 @router.post("/{invite_id}/decline")
-def decline_invite(invite_id: str):
+def decline_invite(invite_id: str, current_user: dict = Depends(get_current_user)):
     invite_res = supabase_admin.table("group_booking_invites").select("*, group_booking_sessions(*)").eq("id", invite_id).execute()
     if not invite_res.data:
         raise HTTPException(status_code=404, detail="Invite not found")
@@ -148,29 +172,62 @@ def decline_invite(invite_id: str):
         raise HTTPException(status_code=400, detail=f"Cannot decline. Session is: {session['status']}")
         
     if invite["status"] == "declined":
+        if not invite.get("invited_user_id"):
+             supabase_admin.table("group_booking_invites").update({
+                 "invited_user_id": current_user["user_id"],
+                 "friend_email": current_user["email"]
+             }).eq("id", invite_id).execute()
         return {"status": "success", "message": "Already declined."}
         
     now = datetime.now(timezone.utc).isoformat()
     supabase_admin.table("group_booking_invites").update({
         "status": "declined",
-        "responded_at": now
+        "responded_at": now,
+        "invited_user_id": current_user["user_id"],
+        "friend_email": current_user["email"]
     }).eq("id", invite_id).execute()
     
-    # If the session was 'ready', it needs to fall back to 'collecting_responses'
-    if session["status"] == "ready":
+    # Check if we dropped below the required number of accepted friends
+    all_invites = supabase_admin.table("group_booking_invites").select("id, status").eq("group_session_id", session["id"]).execute()
+    accepted_count = sum(1 for i in all_invites.data if i["status"] == "accepted" and i["id"] != invite_id)
+    target_count = session["total_seats"] - 1
+    
+    if session["status"] == "ready" and accepted_count < target_count:
         supabase_admin.table("group_booking_sessions").update({
             "status": "collecting_responses"
         }).eq("id", session["id"]).execute()
     
     # Notify initiator safely
     try:
-        _notify_initiator(session["id"], f"⚠️ Note: {invite.get('friend_email')} has declined the group booking invitation. You can cancel the booking or invite someone else.")
+        _notify_initiator(session["id"], f"⚠️ Note: {current_user['email']} has declined the group booking invitation. You can cancel the booking or invite someone else.")
     except Exception as e:
         import logging
         logging.getLogger(__name__).warning(f"Notification failed after successful RSVP decline: {e}")
         return {"status": "success", "message": "Invite declined. (Note: Failed to notify the initiator)"}
     
     return {"status": "success", "message": "Invite declined."}
+
+@router.post("/claim/{share_token}")
+def claim_shared_invite(share_token: str, current_user: dict = Depends(get_current_user)):
+    """Claims a seat via the shareable link. Calls the atomic RPC."""
+    session_res = supabase_admin.table("group_booking_sessions").select("id").eq("share_token", share_token).execute()
+    if not session_res.data:
+        raise HTTPException(status_code=404, detail="Invalid share link.")
+        
+    session_id = session_res.data[0]["id"]
+    
+    # Call the atomic RPC to safely claim
+    rpc_res = supabase_admin.rpc("claim_shared_group_invite", {
+        "p_session_id": session_id,
+        "p_user_id": current_user["user_id"],
+        "p_email": current_user["email"]
+    }).execute()
+    
+    data = rpc_res.data
+    if not data.get("success"):
+        return {"success": False, "reason": data.get("reason")}
+        
+    return {"success": True, "invite_id": data.get("invite_id"), "reason": data.get("reason")}
 
 @session_router.get("/{session_id}")
 def get_session_status(session_id: str, current_user: dict = Depends(get_current_user)):

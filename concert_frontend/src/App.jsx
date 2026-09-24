@@ -15,6 +15,7 @@ import ListYourShowPage from './pages/ListYourShowPage'
 import ArtistProfilePage from './pages/ArtistProfilePage'
 import VenueProfilePage from './pages/VenueProfilePage'
 import GroupInvitePage from './pages/GroupInvitePage'
+import GroupJoinPage from './pages/GroupJoinPage'
 import ChatWidget from './components/ChatWidget'
 import { api } from './lib/api'
 
@@ -35,6 +36,7 @@ export default function App() {
           <Route path="/venues/:id" element={<VenueProfilePage />} />
           <Route path="/ticket/:bookingId" element={<TicketPassPage />} />
           <Route path="/group-invite/:inviteId" element={<GroupInvitePage />} />
+          <Route path="/group-join/:shareToken" element={<GroupJoinPage />} />
           <Route path="/login" element={<AuthPage />} />
           <Route path="/auth/callback" element={<AuthCallbackPage />} />
           <Route path="/complete-profile" element={<CompleteProfilePage />} />
