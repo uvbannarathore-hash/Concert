@@ -14,6 +14,7 @@ const statusStyles = {
 
 export default function BookingsPage() {
   const [bookings, setBookings] = useState([])
+  const [myListings, setMyListings] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [cancellingId, setCancellingId] = useState('')
@@ -21,6 +22,9 @@ export default function BookingsPage() {
   const [selectedPass, setSelectedPass] = useState(null)
   const [reviewingEvent, setReviewingEvent] = useState(null)
   const [razorpayKeyId, setRazorpayKeyId] = useState('')
+  const [sellingBooking, setSellingBooking] = useState(null)
+  const [askingPrice, setAskingPrice] = useState('')
+  const [isProcessingSell, setIsProcessingSell] = useState(false)
 
   function loadRazorpayScript() {
     return new Promise((resolve) => {
@@ -38,11 +42,14 @@ export default function BookingsPage() {
 
   function load() {
     setLoading(true)
-    api
-      .myBookings()
-      .then((data) => {
-        setBookings(data.bookings || [])
-        if (data.razorpay_key_id) setRazorpayKeyId(data.razorpay_key_id)
+    Promise.all([
+      api.myBookings(),
+      api.getMyResaleListings().catch(() => ({ results: [] }))
+    ])
+      .then(([bData, lData]) => {
+        setBookings(bData.bookings || [])
+        setMyListings(lData.results || [])
+        if (bData.razorpay_key_id) setRazorpayKeyId(bData.razorpay_key_id)
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false))
@@ -75,6 +82,43 @@ export default function BookingsPage() {
     } finally {
       setCancellingId('')
       setCancellationEligibility(null)
+    }
+  }
+
+  async function handleSellConfirm() {
+    if (!sellingBooking || !askingPrice) return
+    const numPrice = parseFloat(askingPrice)
+    const maxAllowed = sellingBooking.total_amount * 1.10
+    if (numPrice > maxAllowed) {
+      alert(`Asking price cannot exceed ₹${maxAllowed.toFixed(2)} (110% of what you paid).`)
+      return
+    }
+    
+    setIsProcessingSell(true)
+    try {
+      await api.listResaleTicket({
+        booking_id: sellingBooking.booking_id,
+        asking_price: numPrice
+      })
+      alert("Ticket listed for resale!")
+      setSellingBooking(null)
+      setAskingPrice('')
+      load()
+    } catch (err) {
+      alert("Failed to list ticket: " + err.message)
+    } finally {
+      setIsProcessingSell(false)
+    }
+  }
+
+  async function handleCancelListing(listingId) {
+    if (!window.confirm("Are you sure you want to remove this listing? You will keep the ticket.")) return
+    try {
+      await api.cancelResaleListing(listingId)
+      alert("Listing removed successfully.")
+      load()
+    } catch (err) {
+      alert("Failed to remove listing: " + err.message)
     }
   }
 
@@ -251,6 +295,9 @@ export default function BookingsPage() {
           // Joined events detail is returned from backend as b.events
           const eventDetails = b.events || {}
           const isConfirmed = b.status === 'Confirmed'
+          const isTransferred = b.status === 'Transferred'
+          const activeListing = myListings.find(l => l.booking_id === b.booking_id && l.status === 'Active')
+          const isListed = !!activeListing
           const passUrl = getPublicPassUrl(b.booking_id)
           return (
             <div
@@ -316,8 +363,11 @@ export default function BookingsPage() {
                 {/* Mobile View Pass Button */}
                 <div className="mt-4 pt-3 border-t border-white/[0.04] md:hidden flex justify-between items-center">
                   <button
-                    onClick={() => setSelectedPass(b)}
-                    className="text-xs font-mono text-spot font-bold uppercase tracking-wider flex items-center gap-1.5"
+                    onClick={() => {
+                      if (isListed) alert("Digital pass is disabled while the ticket is listed for resale.")
+                      else setSelectedPass(b)
+                    }}
+                    className={`text-xs font-mono font-bold uppercase tracking-wider flex items-center gap-1.5 ${isListed ? 'text-haze/40 cursor-not-allowed' : 'text-spot'}`}
                   >
                     <span>📱 View Digital Pass</span>
                     <span>↗</span>
@@ -343,22 +393,35 @@ export default function BookingsPage() {
 
                 <div className="text-center md:text-left">
                   <span className="text-[9px] font-mono text-haze/40 block uppercase mb-1 hidden md:block">Entry Status</span>
-                  <span className={`text-[11px] font-mono uppercase px-2.5 py-1 rounded-md border ${statusStyles[b.status] || ''} inline-block`}>
-                    {b.status}
-                  </span>
+                  {isTransferred ? (
+                     <span className="text-[11px] font-mono uppercase px-2.5 py-1 rounded-md border text-spot2 border-spot2/20 bg-spot2/5 inline-block">
+                       Transferred (Sold)
+                     </span>
+                  ) : isListed ? (
+                     <span className="text-[11px] font-mono uppercase px-2.5 py-1 rounded-md border text-spot border-spot/20 bg-spot/5 inline-block">
+                       Listed for Resale
+                     </span>
+                  ) : (
+                    <span className={`text-[11px] font-mono uppercase px-2.5 py-1 rounded-md border ${statusStyles[b.status] || ''} inline-block`}>
+                      {b.status}
+                    </span>
+                  )}
                 </div>
 
                 <div className="hidden md:flex flex-col items-center gap-2 mt-3">
                   
                   {/* Scannable SVG QR Code Card */}
                   <div 
-                    onClick={() => setSelectedPass(b)}
-                    className="w-full bg-white/[0.03] border border-white/[0.06] hover:border-spot/40 p-2.5 rounded-xl flex flex-col items-center gap-1.5 transition-all duration-200 cursor-pointer shadow-inner group/qr"
+                    onClick={() => {
+                      if (isListed) alert("Digital pass is disabled while the ticket is listed for resale.")
+                      else setSelectedPass(b)
+                    }}
+                    className={`w-full bg-white/[0.03] border border-white/[0.06] hover:border-spot/40 p-2.5 rounded-xl flex flex-col items-center gap-1.5 transition-all duration-200 cursor-pointer shadow-inner group/qr ${isListed ? 'opacity-30 cursor-not-allowed grayscale' : ''}`}
                     title="Click to expand Digital Pass"
                   >
                     <div className="p-1.5 bg-white rounded-lg shadow-md group-hover/qr:scale-105 transition-transform duration-200">
                       <QRCodeSVG
-                        value={passUrl}
+                        value={isListed ? 'DISABLED' : passUrl}
                         size={76}
                         level="M"
                         fgColor="#0B0A10"
@@ -366,12 +429,12 @@ export default function BookingsPage() {
                       />
                     </div>
                     <span className="text-[9px] font-mono text-spot group-hover/qr:text-white uppercase tracking-wider font-bold transition flex items-center gap-1">
-                      <span>View Pass</span>
+                      <span>{isListed ? 'Disabled' : 'View Pass'}</span>
                       <span>↗</span>
                     </span>
                   </div>
 
-                  {isConfirmed && (
+                  {isConfirmed && !isTransferred && (
                     <div className="flex flex-col items-center gap-1 w-full text-center mt-2">
                       <button
                         onClick={() => printReceipt(b)}
@@ -379,13 +442,33 @@ export default function BookingsPage() {
                       >
                         Download Receipt
                       </button>
-                      <button
-                        onClick={() => handleCancelInitiate(b.booking_id)}
-                        disabled={cancellingId === b.booking_id}
-                        className="text-[11px] text-haze/60 hover:text-spot underline underline-offset-4 disabled:opacity-40 font-mono transition mt-1"
-                      >
-                        {cancellingId === b.booking_id ? 'Cancelling…' : 'Cancel Ticket'}
-                      </button>
+                      
+                      {!isListed && (
+                        <div className="flex w-full gap-1 mt-1">
+                          <button
+                            onClick={() => handleCancelInitiate(b.booking_id)}
+                            disabled={cancellingId === b.booking_id}
+                            className="text-[10px] flex-1 text-haze/60 hover:text-spot underline underline-offset-4 disabled:opacity-40 font-mono transition"
+                          >
+                            {cancellingId === b.booking_id ? 'Cancelling' : 'Cancel'}
+                          </button>
+                          <button
+                            onClick={() => { setSellingBooking(b); setAskingPrice(b.total_amount) }}
+                            className="text-[10px] flex-1 text-go/80 hover:text-go underline underline-offset-4 font-mono transition"
+                          >
+                            Sell
+                          </button>
+                        </div>
+                      )}
+                      
+                      {isListed && (
+                        <button
+                          onClick={() => handleCancelListing(activeListing.id)}
+                          className="text-[10px] text-haze/60 hover:text-spot underline underline-offset-4 font-mono transition mt-1"
+                        >
+                          Cancel Listing
+                        </button>
+                      )}
                     </div>
                   )}
 
@@ -474,6 +557,59 @@ export default function BookingsPage() {
                 className="btn-spot text-xs uppercase px-4 py-2 font-bold"
               >
                 {cancellingId === cancellationEligibility.bookingId ? 'Cancelling...' : 'Confirm Cancel'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Resale Modal */}
+      {sellingBooking && (
+        <div className="fixed inset-0 bg-void/90 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-stage border border-white/[0.08] rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
+            <h3 className="font-display text-2xl uppercase text-paper mb-4">Sell Ticket</h3>
+            <p className="text-sm text-haze/80 mb-6">
+              List this ticket on the LiveWire Resale Marketplace. Once listed, your QR code will be disabled. 
+              If the ticket sells, you will receive the payout to your saved bank details.
+            </p>
+            
+            <div className="bg-void/50 rounded-lg p-4 mb-6 font-mono text-[11px] space-y-3">
+              <div className="flex justify-between text-haze">
+                <span>Original Price Paid</span>
+                <span>₹{sellingBooking.total_amount}</span>
+              </div>
+              <div className="flex justify-between text-haze">
+                <span>Max Allowed Asking Price (110%)</span>
+                <span>₹{(sellingBooking.total_amount * 1.10).toFixed(2)}</span>
+              </div>
+              
+              <div className="pt-3 border-t border-white/[0.06]">
+                <label className="block text-xs font-mono text-haze/75 mb-1.5 uppercase">Your Asking Price (₹)</label>
+                <input
+                  type="number"
+                  className="w-full bg-void border border-white/[0.08] rounded-lg px-4 py-2.5 text-paper placeholder-haze/30 focus:border-spot focus:ring-1 focus:ring-spot/50 outline-none transition-all font-sans text-sm"
+                  value={askingPrice}
+                  onChange={(e) => setAskingPrice(e.target.value)}
+                  max={(sellingBooking.total_amount * 1.10).toFixed(2)}
+                  min="0"
+                />
+              </div>
+            </div>
+            
+            <div className="flex gap-3 justify-end">
+              <button 
+                onClick={() => { setSellingBooking(null); setAskingPrice('') }}
+                className="btn-ghost text-xs uppercase px-4 py-2"
+                disabled={isProcessingSell}
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={handleSellConfirm}
+                disabled={isProcessingSell || !askingPrice}
+                className="btn-go text-xs uppercase px-4 py-2 font-bold"
+              >
+                {isProcessingSell ? 'Listing...' : 'List on Marketplace'}
               </button>
             </div>
           </div>

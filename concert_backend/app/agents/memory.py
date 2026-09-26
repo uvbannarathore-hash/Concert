@@ -169,22 +169,24 @@ def save_turn(
     table = _table_for(agent)
     user_column = _user_column_for(agent)
 
-    supabase_admin.table(table).insert(
-        [
-            {
-                user_column: user_id,
-                "session_id": session_id,
-                "role": "user",
-                "message": user_message,
-            },
-            {
-                user_column: user_id,
-                "session_id": session_id,
-                "role": "assistant",
-                "message": assistant_reply,
-            },
-        ]
-    ).execute()
+    rows = []
+    if user_message:
+        rows.append({
+            user_column: user_id,
+            "session_id": session_id,
+            "role": "user",
+            "message": user_message,
+        })
+    if assistant_reply:
+        rows.append({
+            user_column: user_id,
+            "session_id": session_id,
+            "role": "assistant",
+            "message": assistant_reply,
+        })
+        
+    if rows:
+        supabase_admin.table(table).insert(rows).execute()
 
 
 def save_messages(

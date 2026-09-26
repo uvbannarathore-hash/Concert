@@ -18,6 +18,118 @@ from app.services.cancellation_service import (
 
 logger = logging.getLogger("booking_routes")
 
+def _insert_booking_ledger(
+    booking_id: str,
+    event_id: str,
+    ticket_price: float,
+    user_fee: float,
+    user_fee_gst: float,
+    fee_waived: bool = False,
+):
+    from app.pricing_utils import round_money, get_commission_pct
+    event_res = supabase_admin.table("events").select("organizer_id").eq("event_id", event_id).execute()
+    organizer_id = event_res.data[0].get("organizer_id") if event_res.data else None
+    
+    organizer_commission = 0.0
+    organizer_commission_gst = 0.0
+    organizer_payout = ticket_price
+    platform_net = user_fee
+    
+    if organizer_id:
+        user_res = supabase_admin.table("users").select("commission_pct, plan_tier, plan_expiry_date").eq("user_id", organizer_id).execute()
+        if user_res.data:
+            organizer = user_res.data[0]
+            comm_pct = float(get_commission_pct(organizer))
+            organizer_commission = float(round_money(ticket_price * comm_pct))
+            organizer_commission_gst = float(round_money(organizer_commission * 0.18))
+            organizer_payout = float(round_money(ticket_price - organizer_commission - organizer_commission_gst))
+            platform_net = float(round_money(user_fee + organizer_commission))
+            
+    try:
+        supabase_admin.table("booking_ledger").insert({
+            "booking_id": booking_id,
+            "ticket_price": ticket_price,
+            "user_fee": user_fee,
+            "user_fee_gst": user_fee_gst,
+            "organizer_commission": organizer_commission,
+            "organizer_commission_gst": organizer_commission_gst,
+            "organizer_payout": organizer_payout,
+            "platform_net": platform_net,
+            "payout_status": "awaiting_payment",
+            "fee_waived": fee_waived,
+        }).execute()
+    except Exception as e:
+        if "23505" not in str(e): # Ignore unique_violation
+            logger.error(f"Failed to insert booking ledger for {booking_id}: {e}")
+            raise e
+
+
+def _compute_user_fee(ticket_price: float, user_id: str):
+    """
+    Returns (user_fee, user_fee_gst, fee_waived, waiver_slots_used, waiver_slots_remaining).
+
+    LiveWire Plus members get their booking fee waived for up to 4 bookings
+    per calendar month (UTC boundary). Once all 4 slots are used, normal
+    fees resume for the rest of the month.
+
+    Non-Plus users always pay the standard 6% + 18% GST.
+    """
+    from app.pricing_utils import round_money
+    from datetime import datetime, timezone
+
+    PLUS_WAIVER_LIMIT = 4
+
+    try:
+        user_res = supabase_admin.table("users").select(
+            "is_plus_member, plus_expiry_date"
+        ).eq("user_id", user_id).execute()
+    except Exception:
+        user_res = None
+
+    is_active_plus = False
+    if user_res and user_res.data:
+        row = user_res.data[0]
+        if row.get("is_plus_member") and row.get("plus_expiry_date"):
+            expiry = datetime.fromisoformat(row["plus_expiry_date"])
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            is_active_plus = expiry >= datetime.now(timezone.utc)
+
+    waiver_slots_used = 0
+    waiver_slots_remaining = 0
+    fee_waived = False
+
+    if is_active_plus:
+        now = datetime.now(timezone.utc)
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        try:
+            bookings_res = supabase_admin.table("bookings").select("booking_id").eq(
+                "user_id", user_id
+            ).neq("status", "Cancelled").gte("created_at", month_start.isoformat()).execute()
+            booking_ids = [b["booking_id"] for b in bookings_res.data]
+            if booking_ids:
+                waived_res = supabase_admin.table("booking_ledger").select("booking_id").eq(
+                    "fee_waived", True
+                ).in_("booking_id", booking_ids).execute()
+                waiver_slots_used = len(waived_res.data)
+        except Exception as exc:
+            logger.warning(f"Could not count waiver slots for {user_id}: {exc}")
+
+        if waiver_slots_used < PLUS_WAIVER_LIMIT:
+            fee_waived = True
+
+        waiver_slots_remaining = max(0, PLUS_WAIVER_LIMIT - waiver_slots_used)
+
+    if fee_waived:
+        user_fee = 0.0
+        user_fee_gst = 0.0
+    else:
+        user_fee = float(round_money(ticket_price * 0.06))
+        user_fee_gst = float(round_money(user_fee * 0.18))
+
+    return user_fee, user_fee_gst, fee_waived, waiver_slots_used, waiver_slots_remaining
+
+
 router = APIRouter(prefix="/bookings", tags=["bookings"])
 
 razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
@@ -139,6 +251,11 @@ def create_order(request: Request, payload: CreateOrderRequest, current_user: di
     """
     _check_not_admin(current_user)
 
+    # 0. Block organizers from booking their own events to prevent self-commission loops
+    event_res = supabase_admin.table("events").select("organizer_id").eq("event_id", payload.event_id).execute()
+    if event_res.data and event_res.data[0].get("organizer_id") == current_user["user_id"]:
+        raise HTTPException(status_code=403, detail="Organizers cannot book tickets to their own events")
+
     # 1. Soft-check so we don't spam Razorpay if already sold out
     ticket_row = _get_ticket_or_404(payload.event_id, payload.category)
     if ticket_row["available_seats"] < payload.seats:
@@ -170,9 +287,16 @@ def create_order(request: Request, payload: CreateOrderRequest, current_user: di
             raise HTTPException(status_code=400, detail="Coupon is not valid for this user")
             
         if coupon["discount_type"] == "percentage":
-            discount_amount = int(round(amount_inr * float(coupon["discount_value"]) / 100))
+            discount_amount = float(amount_inr) * float(coupon["discount_value"]) / 100.0
         elif coupon["discount_type"] == "fixed":
-            discount_amount = int(round(float(coupon["discount_value"])))
+            discount_amount = float(coupon["discount_value"])
+            
+        max_disc = coupon.get("max_discount_amount")
+        if max_disc is not None and discount_amount > float(max_disc):
+            discount_amount = float(max_disc)
+            
+        from app.pricing_utils import round_money
+        discount_amount = float(round_money(discount_amount))
             
         coupon_id = coupon["id"]
 
@@ -181,7 +305,14 @@ def create_order(request: Request, payload: CreateOrderRequest, current_user: di
         discount_amount = amount_inr - 1
         final_amount_inr = 1
 
-    amount_paise = int(round(final_amount_inr * 100))  # Razorpay expects the smallest currency unit
+    from app.pricing_utils import round_money
+    ticket_price = float(round_money(final_amount_inr))
+    user_fee, user_fee_gst, fee_waived, waiver_slots_used, waiver_slots_remaining = _compute_user_fee(
+        ticket_price, current_user["user_id"]
+    )
+    razorpay_total = ticket_price + user_fee + user_fee_gst
+
+    amount_paise = int(round(razorpay_total * 100))  # Razorpay expects the smallest currency unit
 
     booking_id = f"BK{int(time.time() * 1000)}"
 
@@ -228,12 +359,24 @@ def create_order(request: Request, payload: CreateOrderRequest, current_user: di
 
     supabase_admin.table("bookings").update(update_data).eq("booking_id", booking_id).execute()
 
+    _insert_booking_ledger(
+        booking_id=booking_id,
+        event_id=payload.event_id,
+        ticket_price=ticket_price,
+        user_fee=user_fee,
+        user_fee_gst=user_fee_gst,
+        fee_waived=fee_waived,
+    )
+
     return {
         "booking_id": booking_id,
         "razorpay_order_id": razorpay_order["id"],
         "amount": amount_paise,
         "currency": "INR",
         "razorpay_key_id": RAZORPAY_KEY_ID,  # public key, safe to expose to frontend
+        "fee_waived": fee_waived,
+        "waiver_slots_used": waiver_slots_used,
+        "waiver_slots_remaining": waiver_slots_remaining,
     }
 
 
@@ -309,6 +452,11 @@ def create_order_seats(request: Request, payload: CreateSeatOrderRequest, curren
     """
     _check_not_admin(current_user)
 
+    # 0. Block organizers from booking their own events to prevent self-commission loops
+    event_res = supabase_admin.table("events").select("organizer_id").eq("event_id", payload.event_id).execute()
+    if event_res.data and event_res.data[0].get("organizer_id") == current_user["user_id"]:
+        raise HTTPException(status_code=403, detail="Organizers cannot book tickets to their own events")
+
     result = supabase_admin.rpc(
         "book_specific_seats",
         {"p_user_id": current_user["user_id"], "p_event_id": payload.event_id, "p_seat_ids": payload.seat_ids},
@@ -349,9 +497,16 @@ def create_order_seats(request: Request, payload: CreateSeatOrderRequest, curren
             raise HTTPException(status_code=400, detail="Coupon is not valid for this user")
             
         if coupon["discount_type"] == "percentage":
-            discount_amount = int(round(amount_inr * float(coupon["discount_value"]) / 100))
+            discount_amount = float(amount_inr) * float(coupon["discount_value"]) / 100.0
         elif coupon["discount_type"] == "fixed":
-            discount_amount = int(round(float(coupon["discount_value"])))
+            discount_amount = float(coupon["discount_value"])
+            
+        max_disc = coupon.get("max_discount_amount")
+        if max_disc is not None and discount_amount > float(max_disc):
+            discount_amount = float(max_disc)
+            
+        from app.pricing_utils import round_money
+        discount_amount = float(round_money(discount_amount))
             
         coupon_id = coupon["id"]
 
@@ -360,7 +515,14 @@ def create_order_seats(request: Request, payload: CreateSeatOrderRequest, curren
         discount_amount = amount_inr - 1
         final_amount_inr = 1
 
-    amount_paise = int(round(final_amount_inr * 100))
+    from app.pricing_utils import round_money
+    ticket_price = float(round_money(final_amount_inr))
+    user_fee, user_fee_gst, fee_waived, waiver_slots_used, waiver_slots_remaining = _compute_user_fee(
+        ticket_price, current_user["user_id"]
+    )
+    razorpay_total = ticket_price + user_fee + user_fee_gst
+
+    amount_paise = int(round(razorpay_total * 100))
 
     try:
         razorpay_order = razorpay_client.order.create(
@@ -394,12 +556,24 @@ def create_order_seats(request: Request, payload: CreateSeatOrderRequest, curren
 
     supabase_admin.table("bookings").update(update_data).eq("booking_id", data["booking_id"]).execute()
 
+    _insert_booking_ledger(
+        booking_id=data["booking_id"],
+        event_id=payload.event_id,
+        ticket_price=ticket_price,
+        user_fee=user_fee,
+        user_fee_gst=user_fee_gst,
+        fee_waived=fee_waived,
+    )
+
     return {
         "booking_id": data["booking_id"],
         "razorpay_order_id": razorpay_order["id"],
         "amount": amount_paise,
         "currency": "INR",
         "razorpay_key_id": RAZORPAY_KEY_ID,
+        "fee_waived": fee_waived,
+        "waiver_slots_used": waiver_slots_used,
+        "waiver_slots_remaining": waiver_slots_remaining,
     }
 
 
@@ -524,6 +698,11 @@ def verify_payment(payload: VerifyPaymentRequest, current_user: dict = Depends(g
             "razorpay_payment_id": payload.razorpay_payment_id,
         }
     ).eq("booking_id", payload.booking_id).execute()
+    
+    supabase_admin.table("booking_ledger").update(
+        {"payout_status": "pending", "updated_at": "now()"}
+    ).eq("booking_id", payload.booking_id).eq("payout_status", "awaiting_payment").execute()
+
 
     # If this was a group booking, mark the session as booked
     supabase_admin.table("group_booking_sessions").update(
@@ -665,6 +844,10 @@ async def razorpay_webhook(request: Request):
                     "total_amount": amount,
                 }
             ).eq("booking_id", booking_row["booking_id"]).execute()
+            
+            supabase_admin.table("booking_ledger").update(
+                {"payout_status": "pending", "updated_at": "now()"}
+            ).eq("booking_id", booking_row["booking_id"]).eq("payout_status", "awaiting_payment").execute()
 
             # If this was a group booking, mark the session as booked
             supabase_admin.table("group_booking_sessions").update(

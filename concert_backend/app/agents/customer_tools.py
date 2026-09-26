@@ -498,13 +498,12 @@ def approve_seat_upgrade(user_id: str, booking_id: str) -> dict:
 # Group Booking Coordinator Tools
 # ---------------------------------------------------------------------------
 
-def initiate_group_booking(user_id: str, event_id: str, category: str, seats: int, friend_emails: list) -> dict:
+def initiate_group_booking(user_id: str, event_id: str, category: str, seats: int, friend_emails: list = None) -> dict:
     from app.services.email_service import send_group_invite_email
     from datetime import datetime, timedelta, timezone
 
-    # Validate inputs
-    if not friend_emails or not isinstance(friend_emails, list):
-        return {"success": False, "message": "You must provide a list of friend emails."}
+    if friend_emails is None:
+        friend_emails = []
         
     # Deduplicate and remove initiator
     user_res = supabase_admin.table("users").select("email, name").eq("user_id", user_id).execute()
@@ -516,9 +515,6 @@ def initiate_group_booking(user_id: str, event_id: str, category: str, seats: in
         em = em.lower().strip()
         if em and em != initiator_email and em not in unique_emails:
             unique_emails.append(em)
-            
-    if not unique_emails:
-        return {"success": False, "message": "No valid friends' emails provided."}
 
     # Validate availability
     cat_res = supabase_admin.table("ticket_categories").select("*").eq("event_id", event_id).eq("category", category).execute()
@@ -1168,9 +1164,9 @@ FUNCTION_DECLARATIONS = [
                 "event_id": {"type": "string", "description": "The event ID."},
                 "category": {"type": "string", "description": "The ticket category."},
                 "seats": {"type": "integer", "description": "Total number of seats needed."},
-                "friend_emails": {"type": "array", "items": {"type": "string"}, "description": "List of friends' email addresses."}
+                "friend_emails": {"type": "array", "items": {"type": "string"}, "description": "List of friends' email addresses (optional. If empty, returns a shareable link)."}
             },
-            "required": ["event_id", "category", "seats", "friend_emails"]
+            "required": ["event_id", "category", "seats"]
         }
     },
     {

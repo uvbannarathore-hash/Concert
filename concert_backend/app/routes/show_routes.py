@@ -70,6 +70,15 @@ async def submit_show(
     if not data.categories:
         raise HTTPException(status_code=400, detail="At least one ticket category is required.")
 
+    from datetime import datetime
+    try:
+        year = int(data.event_date.split("-")[0])
+        current_year = datetime.now().year
+        if not (current_year <= year <= current_year + 3):
+            raise HTTPException(status_code=400, detail=f"Event year must be between {current_year} and {current_year + 3}.")
+    except (ValueError, IndexError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid event_date format.")
+
     image_url = None
     if image is not None:
         file_bytes = await image.read()

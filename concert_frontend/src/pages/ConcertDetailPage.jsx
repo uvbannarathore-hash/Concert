@@ -48,6 +48,8 @@ export default function ConcertDetailPage() {
 
   const [event, setEvent] = useState(null)
   const [tickets, setTickets] = useState([])
+  const [resaleTickets, setResaleTickets] = useState([])
+  const [activeTab, setActiveTab] = useState('official') // 'official' | 'resale'
   const [selected, setSelected] = useState(null)
   const [seats, setSeats] = useState(1)
   const [error, setError] = useState('')
@@ -73,6 +75,15 @@ export default function ConcertDetailPage() {
   const [couponError, setCouponError] = useState('')
   const [couponLoading, setCouponLoading] = useState(false)
   const [buyAdvice, setBuyAdvice] = useState(null)
+
+  // LiveWire Plus — fetched once on mount; drives fee-waiver display
+  const [plusStatus, setPlusStatus] = useState(null)
+
+  useEffect(() => {
+    if (api.isLoggedIn()) {
+      api.getMembershipStatus().then(setPlusStatus).catch(() => setPlusStatus({ is_active: false }))
+    }
+  }, [])
 
   useEffect(() => {
     setAppliedCoupon(null)
@@ -140,6 +151,10 @@ export default function ConcertDetailPage() {
            setBuyAdvice(data)
          }
        })
+       .catch(() => {})
+
+    api.getResaleTickets(eventId)
+       .then((data) => setResaleTickets(data.results || []))
        .catch(() => {})
   }, [eventId])
 
@@ -269,7 +284,9 @@ export default function ConcertDetailPage() {
 
     let order
     try {
-      if (hasSeatMap) {
+      if (activeTab === 'resale') {
+        order = await api.createResaleOrder(selected.id)
+      } else if (hasSeatMap) {
         await api.lockSeats(eventId, selectedSeatIds)
         order = await api.createOrderSeats(eventId, selectedSeatIds, appliedCoupon?.code)
       } else {
@@ -304,13 +321,24 @@ export default function ConcertDetailPage() {
       theme: { color: '#ff3d6e' },
       handler: async (response) => {
         try {
-          const res = await api.verifyPayment({
-            booking_id: order.booking_id,
-            razorpay_order_id: response.razorpay_order_id,
-            razorpay_payment_id: response.razorpay_payment_id,
-            razorpay_signature: response.razorpay_signature,
-          })
-          setConfirmedId(res.booking_id)
+          let res;
+          if (activeTab === 'resale') {
+            res = await api.buyResaleTicket({
+              listing_id: selected.id,
+              booking_id: order.booking_id,
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+            })
+          } else {
+            res = await api.verifyPayment({
+              booking_id: order.booking_id,
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+            })
+          }
+          setConfirmedId(res.booking_id || res.new_booking_id)
           setPaymentId(res.payment_id)
           setStatus('done')
         } catch (err) {
@@ -322,10 +350,12 @@ export default function ConcertDetailPage() {
         ondismiss: async () => {
           setStatus('')
           try {
-            // Cancelling the booking also releases the specific seats back
-            // to Available via trg_restore_specific_seats, same trigger
-            // pattern the plain category flow already relied on.
-            await api.cancelBooking(order.booking_id)
+            if (activeTab !== 'resale') {
+              // Cancelling the booking also releases the specific seats back
+              // to Available via trg_restore_specific_seats, same trigger
+              // pattern the plain category flow already relied on.
+              await api.cancelBooking(order.booking_id)
+            }
           } catch (e) {
             // best-effort cleanup; ignore
           }
@@ -374,11 +404,31 @@ export default function ConcertDetailPage() {
     )
   }
 
-  const originalTotal = hasSeatMap ? seatCategoryPrice * selectedSeatIds.length : (selected ? selected.price_inr * seats : 0)
-  const total = appliedCoupon ? appliedCoupon.final_amount : originalTotal
-  const canPay = hasSeatMap ? selectedSeatIds.length > 0 : Boolean(selected)
-  const bookedCategory = hasSeatMap ? selectedSeatCategory : selected?.category
-  const bookedSeatCount = hasSeatMap ? selectedSeatIds.length : seats
+  const originalTotal = activeTab === 'resale' && selected ? selected.asking_price : (hasSeatMap ? seatCategoryPrice * selectedSeatIds.length : (selected ? selected.price_inr * seats : 0))
+  
+  // Calculate discount and fees client-side to match backend LiveWire logic
+  const discountAmount = appliedCoupon ? (originalTotal - appliedCoupon.final_amount) : 0
+  let postDiscount = originalTotal - discountAmount
+  if (postDiscount < 1 && originalTotal > 0) postDiscount = 1
+  
+  const ticketPrice = Math.round(postDiscount * 100) / 100
+
+  // Plus waiver: active member with slots remaining gets 0 fee this booking
+  const isActivePlus = plusStatus?.is_active
+  const waiverRemaining = plusStatus?.waiver_slots_remaining ?? 0
+  const feeWaivedLocally = isActivePlus && waiverRemaining > 0
+
+  // Resale has a fixed 0% buyer fee in this MVP or 5% (we didn't specify buyer fee, seller pays 5%). 
+  // Wait, backend for resale doesn't charge buyer fee? 
+  // Yes, backend buy_resale_ticket logic just takes the asking_price.
+  // We'll set userFee and userFeeGst to 0 for resale.
+  const userFee = activeTab === 'resale' ? 0 : (feeWaivedLocally ? 0 : Math.round((ticketPrice * 0.06) * 100) / 100)
+  const userFeeGst = activeTab === 'resale' ? 0 : (feeWaivedLocally ? 0 : Math.round((userFee * 0.18) * 100) / 100)
+  
+  const total = ticketPrice + userFee + userFeeGst
+  const canPay = activeTab === 'resale' ? Boolean(selected) : (hasSeatMap ? selectedSeatIds.length > 0 : Boolean(selected))
+  const bookedCategory = activeTab === 'resale' ? selected?.category : (hasSeatMap ? selectedSeatCategory : selected?.category)
+  const bookedSeatCount = activeTab === 'resale' ? 1 : (hasSeatMap ? selectedSeatIds.length : seats)
 
   // --- Success State UI (Styled physical pass stub) ---
   if (status === 'done') {
@@ -671,7 +721,65 @@ export default function ConcertDetailPage() {
           )}
 
           <div className="bg-stage/20 border border-white/[0.04] p-6 rounded-2xl">
-            {event.status === 'Sold Out' ? (
+            {/* Tabs */}
+            <div className="flex gap-2 mb-6 border-b border-white/[0.06] pb-4">
+              <button
+                onClick={() => { setActiveTab('official'); setSelected(null); }}
+                className={`text-xs font-mono uppercase tracking-wider px-4 py-2 transition-all duration-300 border-b-2 ${
+                  activeTab === 'official' ? 'border-spot text-spot font-bold' : 'border-transparent text-haze hover:text-paper'
+                }`}
+              >
+                Official Tickets
+              </button>
+              {resaleTickets.length > 0 && (
+                <button
+                  onClick={() => { setActiveTab('resale'); setSelected(null); setSelectedSeatIds([]); }}
+                  className={`text-xs font-mono uppercase tracking-wider px-4 py-2 transition-all duration-300 border-b-2 flex items-center gap-1.5 ${
+                    activeTab === 'resale' ? 'border-spot text-spot font-bold' : 'border-transparent text-haze hover:text-paper'
+                  }`}
+                >
+                  Resale 
+                  <span className="bg-spot/10 text-spot border border-spot/20 rounded-full px-1.5 py-0.5 text-[9px]">
+                    {resaleTickets.length}
+                  </span>
+                </button>
+              )}
+            </div>
+
+            {activeTab === 'resale' ? (
+              <>
+                <h2 className="font-display text-2xl tracking-wide text-paper uppercase mb-4 flex items-center justify-between">
+                  RESALE MARKETPLACE
+                </h2>
+                <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+                  {resaleTickets.map((t) => {
+                    const isSelected = selected?.id === t.id
+                    return (
+                      <button
+                        key={t.id}
+                        onClick={() => setSelected(t)}
+                        className={`w-full text-left rounded-xl border p-4 transition-all duration-300 outline-none flex items-center justify-between ${
+                          isSelected
+                            ? 'border-spot bg-spot/5 shadow-[0_0_15px_rgba(255,61,110,0.1)]'
+                            : 'border-white/[0.06] bg-white/[0.01] hover:border-white/[0.12] hover:bg-white/[0.02]'
+                        }`}
+                      >
+                        <div>
+                          <span className="font-display text-lg tracking-wider text-paper uppercase block">{t.category}</span>
+                          <span className="text-[10px] text-haze font-mono block mt-0.5">
+                            Listed by verified fan
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <span className="font-mono text-base text-spot2 font-semibold block">₹{t.asking_price}</span>
+                          <span className="text-[9px] text-haze/50 line-through">₹{t.original_total_paid}</span>
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
+              </>
+            ) : event.status === 'Sold Out' ? (
               <div className="text-center py-6">
                 <h2 className="font-display text-2xl tracking-wide text-paper uppercase mb-4">Event is Sold Out</h2>
                 <p className="text-sm text-haze mb-6">
@@ -752,7 +860,7 @@ export default function ConcertDetailPage() {
               </>
             )}
 
-            {event.status !== 'Sold Out' && canPay && (
+            {activeTab === 'official' && event.status !== 'Sold Out' && canPay && (
               <div className="border-t border-white/[0.04] pt-4 mt-6 space-y-4">
                 
                 {/* Promo Code Input */}
@@ -779,10 +887,50 @@ export default function ConcertDetailPage() {
                   {appliedCoupon && <p className="text-go text-xs font-mono">✅ {appliedCoupon.message}. Saved ₹{appliedCoupon.discount_amount}!</p>}
                 </div>
 
+                <div className="border-t border-white/[0.04] pt-4 space-y-2 mb-4">
+                  <div className="flex justify-between text-xs font-mono text-haze">
+                    <span>Ticket Price</span>
+                    <span>₹{originalTotal}</span>
+                  </div>
+                  {discountAmount > 0 && (
+                    <div className="flex justify-between text-xs font-mono text-go">
+                      <span>Discount</span>
+                      <span>-₹{discountAmount}</span>
+                    </div>
+                  )}
+                  {feeWaivedLocally ? (
+                    <div className="flex justify-between text-xs font-mono text-go">
+                      <span className="flex items-center gap-1">
+                        Platform Fee
+                        <span className="text-[9px] bg-spot/10 text-spot border border-spot/30 rounded px-1 py-0.5 font-mono uppercase tracking-wider">Plus · Waived</span>
+                      </span>
+                      <span>₹0.00</span>
+                    </div>
+                  ) : (
+                    <div className="flex justify-between text-xs font-mono text-haze">
+                      <span>Platform Fee (6%)</span>
+                      <span>₹{userFee.toFixed(2)}</span>
+                    </div>
+                  )}
+                  {!feeWaivedLocally && (
+                    <div className="flex justify-between text-xs font-mono text-haze">
+                      <span>Fee GST (18%)</span>
+                      <span>₹{userFeeGst.toFixed(2)}</span>
+                    </div>
+                  )}
+                  {isActivePlus && (
+                    <div className="text-[10px] font-mono text-haze/60 text-right">
+                      {waiverRemaining > 0
+                        ? `LiveWire Plus · ${waiverRemaining} waiver${waiverRemaining !== 1 ? 's' : ''} remaining this month`
+                        : 'LiveWire Plus · 4/4 waivers used this month'}
+                    </div>
+                  )}
+                </div>
+
                 <div className="flex items-end justify-between border-t border-white/[0.04] pt-4">
                   <div>
                     <span className="text-[10px] font-mono text-haze uppercase block">Total Due</span>
-                    <span className="font-display text-3xl text-spot2">₹{total}</span>
+                    <span className="font-display text-3xl text-spot2">₹{total.toFixed(2)}</span>
                     {appliedCoupon && <span className="text-xs text-haze line-through ml-2">₹{originalTotal}</span>}
                   </div>
 
@@ -793,6 +941,29 @@ export default function ConcertDetailPage() {
                   ) : (
                     <button onClick={handlePay} disabled={status === 'paying'} className="btn-spot text-sm">
                       {status === 'paying' ? 'Opening Payment…' : `Pay ₹${total}`}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'resale' && canPay && (
+              <div className="border-t border-white/[0.04] pt-4 mt-6 space-y-4">
+                 <div className="flex items-end justify-between">
+                  <div>
+                    <span className="text-[10px] font-mono text-haze uppercase block">Total Due (Resale)</span>
+                    <span className="font-display text-3xl text-spot2">₹{total.toFixed(2)}</span>
+                  </div>
+
+                  {isAdmin !== false ? (
+                    <div className="bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-mono py-2.5 px-4 rounded-xl max-w-[200px]">
+                      {isAdmin === null ? 'Checking account…' : 'Admins cannot book tickets'}
+                    </div>
+                  ) : (
+                    <button onClick={handlePay} disabled={status === 'paying'} className="btn-go text-sm font-bold tracking-widest relative overflow-hidden group">
+                      <span className="relative z-10 flex items-center gap-2">
+                        {status === 'paying' ? 'Processing...' : `Buy for ₹${total}`}
+                      </span>
                     </button>
                   )}
                 </div>

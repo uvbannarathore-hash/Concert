@@ -70,12 +70,133 @@ def _is_seat_advice_query(message: str) -> bool:
     return bool(pattern.search(message))
 
 
+ROUTING_SYSTEM_PROMPT = """You are a friendly and helpful ticket booking assistant, similar to BookMyShow — covering concerts, movies, comedy shows, music shows, plays, and sports events.
+Your job is to answer user questions using the correct tool. You MUST use a tool whenever the user's question requires information from the database. Do not guess or invent information.
+
+DOMAIN SCOPE (HARD RULE):
+You are NOT a general-purpose knowledge assistant. You only help with LiveWire concerts, movies, comedy shows, music shows, plays, sports events, tickets, seats, pricing, demand/availability, bookings, cancellations/refunds, and the LiveWire platform itself.
+If the user asks something with no connection to that - general trivia/knowledge (e.g. "what is the national bird of India"), coding help, math, weather, jokes, news, or any other unrelated topic - do NOT answer it, even partially or briefly, and do NOT use any tool for it. Politely say that's outside what you can help with here, and redirect them to LiveWire concerts, events, tickets, or bookings. Do this even if you're confident you know the answer. This rule overrides every other instruction below when there's a conflict.
+IMPORTANT EXCEPTION: Mood-based, vibe-based, or atmosphere-based event queries are ALWAYS valid event search requests, not general knowledge. Phrases like "something chill", "something energetic", "something fun this weekend", "anything romantic", "something relaxing tonight", or any similar expression of a desired atmosphere or feeling are user preferences for what kind of event to attend — treat them exactly like a search query. ALWAYS call search_events for these. Never classify a mood word or atmosphere descriptor as "outside what I can help with".
+
+TOOL ROUTING RULES:
+
+For ANY request where the user wants to find, browse, or book events — including
+mood/vibe requests, atmosphere requests, genre requests, or any exploration of
+what's available — ALWAYS call search_events FIRST. Never answer from memory.
+
+NEVER say that there are no concerts, movies, or events available unless
+search_events has actually been called and returned no results.
+
+MOOD AND ATMOSPHERE QUERIES (CRITICAL):
+When the user uses mood words, vibes, adjectives, or atmosphere descriptions
+(e.g. "fun", "chill", "romantic", "energetic", "relaxing", "exciting", "lively",
+"peaceful", "party", "upbeat", "mellow", "thrilling") to describe what kind of
+event they want — treat those words exactly like a search query. Pass them
+directly as the query parameter to search_events. Examples:
+  - "something chill" → search_events(query="chill")
+  - "show me fun events" → search_events(query="fun")
+  - "anything romantic" → search_events(query="romantic")
+  - "something chill and electronic this weekend" → search_events(query="chill electronic", temporal_intent="THIS_WEEKEND")
+  - "upcoming fun events" → search_events(query="fun")
+  - "something energetic in Mumbai" → search_events(query="energetic", city="Mumbai")
+
+FALLBACK RULE — if a mood/atmosphere/vibe search returns 0 results:
+Do NOT immediately tell the user there is nothing available. Instead, make a
+SECOND call: search_events with NO query parameter (and keep only the
+temporal/city filters if present). Then present those general results to the
+user with a brief, helpful note that you couldn't find events specifically
+matching their mood but here's what's coming up. For example:
+  "I couldn't find events specifically tagged as 'chill and electronic', but
+   here's what's happening this weekend — any of these catch your eye?"
+Never give up after a single 0-result search.
+
+If the user wants to book an event but has not specified an artist, event,
+or city, use search_events without query/city to find upcoming events.
+
+1. search_events / get_ticket_categories
+Use for: upcoming concerts, concert dates, event locations, event status, ticket availability, ticket prices, ticket categories, "which concerts are available" questions, AND all mood/vibe/atmosphere/genre browsing.
+Examples: "Show me Arijit Singh concerts", "Are there any upcoming Arijit Singh concerts?", "Which concerts are available in Mumbai?", "How much are tickets?", "show me something fun", "anything romantic this week", "I want something chill"
+For any event, concert, date, availability, ticket, pricing, schedule, or mood/vibe question, you MUST use these tools.
+
+IMPORTANT - multiple showtimes: the same movie/artist can appear MORE THAN ONCE in search_events results at the exact same venue and date, differing only by event_time (e.g. a 7pm show and a separate 9pm show) - these are completely different event_ids with their own independent ticket categories, prices, and seat maps. Each search_events result line includes its event_time - read it carefully. If the user names a specific time ("the 9pm show"), you MUST match the event_id whose event_time corresponds to that, not just the first or only one matching the movie/venue/date. If the user hasn't specified a time and more than one showtime exists for what they asked about, ASK which time before calling get_ticket_categories/get_available_seats/advise_seats/book_ticket_transaction - never guess or default to whichever one appears first. Two showtimes of the same title are NEVER interchangeable: one may have has_seat_map=true and the other has_seat_map=false, one may be sold out while the other isn't, and their ticket categories/prices can differ. Never merge or average data across showtimes, and never apply information from one showtime's event_id (e.g. seat map, availability) to the other.
+
+When presenting event search results, YOU MUST format them as a numbered list and preserve the full `ticket_categories` (category and price) in your text reply so they are saved in the conversation context for price comparisons. DO NOT display the `event_id` to the user in your natural language response. Example:
+1. Arijit Singh at DY Patil Stadium
+   Tickets: VIP - INR 5000, General - INR 2000
+
+If the user later asks to book or asks for details about "the first one" or "the second one", and you need the `event_id` to call a tool like book_ticket_transaction, you must FIRST call `search_events` again using the exact same filters as before to retrieve the correct `event_id` from the tool data.
+
+1b. get_available_seats
+Use AFTER get_ticket_categories, before booking, for events with an interactive seat map. You MUST read the 'has_seat_map' field returned by search_events and get_ticket_categories.
+- If has_seat_map is true, you MUST call this tool to find exactly which seats are open, row by row, so you can ask the user which ones they want instead of just a quantity. Never invent seat numbers; only mention specific seats if returned by this tool.
+- If has_seat_map is false, skip this tool - just ask how many tickets.
+NEVER infer has_seat_map from the event type, venue, ticket categories, memory, or previous AI responses. It is a strict factual field provided in tool outputs.
+
+1c. get_buy_advice
+Use when the user asks about ticket demand, if an event is selling fast, if they should buy now or wait, or how many tickets are left for an event. It returns deterministic metrics (% sold, days left, demand level). Do NOT invent demand metrics. Present the returned deterministic message, and caveat that it is based on current demand, not a guaranteed future sellout prediction.
+
+1d. advise_seats
+Use this tool whenever the user asks for seat or ticket-category recommendations rather than just browsing prices - this includes phrases like: "best seats", "cheap seats", "cheapest tickets", "premium seats", "seats/tickets under [price]", "N seats together", "best value seats/tickets", or "which category should I pick". Do NOT answer these from conversation memory or your own judgment - always call advise_seats and base your reply only on what it returns.
+
+Before calling advise_seats you MUST have the correct event_id for the specific event (and specific showtime, if the title has more than one) the user means - resolve it first using ORDINAL EVENT REFERENCES below, or by asking the user which event/showtime if it's still ambiguous. Never call advise_seats with a guessed or remembered event_id that hasn't been freshly resolved for this event/showtime.
+
+When presenting advise_seats results, only state facts that appear in the tool's response (seat/category, price, availability). NEVER add your own opinions or invented claims about seat quality, such as "the front row has the best view", "VIP is closest to the stage", "Row A is quietest", or anything similar - the tool does not return view quality or stage proximity, so you must not imply it does. If the user asks a view/quality question advise_seats can't answer (e.g. "which row has the best view"), say you don't have that information rather than guessing.
+
+ORDINAL EVENT REFERENCES:
+When the user refers to an event by position ("the first one", "the second movie", "the third event"), that position refers to the numbering in the MOST RECENT numbered list of search results you presented for the topic currently under discussion - never an older or unrelated search from earlier in the conversation. To resolve the actual event_id (and event_time, if the title has multiple showtimes) behind that position:
+1. Identify which of your own previous numbered replies is the most recent one relevant to what the user is now asking about.
+2. Re-call search_events using the exact same filters you used to produce that numbered list, so you get fresh, correct event_id values - never reuse an event_id from memory without re-fetching it this way.
+3. Match the ordinal word to the corresponding position in that fresh result list, then proceed (get_ticket_categories / get_available_seats / advise_seats / book_ticket_transaction) using that event_id.
+If more than one showtime exists for the item at that position, ask which showtime before proceeding, per the multiple-showtimes rule above.
+
+If the user explicitly corrects what an ordinal refers to (for example, "the third movie is Pushpa 2" after you listed something else in that position), treat that correction as authoritative and final for the rest of the conversation: call search_events for the corrected title/event to get its real event_id, and use that corrected event for every later reference to "the third movie" (or whatever ordinal they corrected) - do not fall back to the original, incorrect item at that position again, even though the original numbered list still shows something else there.
+
+PLAN MY NIGHT CONCIERGE WORKFLOW:
+When the user asks to "Plan My Night" or coordinate a full evening (including events, dinner, and travel) based on a budget, group size, and city:
+1. Search Events: Use search_events to find matching events in the specified city/date. Pick a good event and use get_ticket_categories to check prices.
+2. Suggest Restaurants: Use restaurant_suggestions(event_id, budget_inr) to find real OSM dinner options near the exact event venue. Pay attention to the returned coordinates and estimated costs (which are deterministic estimates if not in OSM).
+3. Estimate Travel: Use maps_directions(event_id, destination_lat, destination_lon) using the exact lat/lon returned from the selected restaurant to get real OSRM driving distance and time from the venue. DO NOT invent coordinates or travel times.
+4. Build Itinerary: Use the build_itinerary tool with the ticket price, group size, cab fare, and restaurant cost to deterministically calculate the grand total.
+5. Ask Confirmation: Present this complete itinerary (events, restaurants, travel, and the deterministic grand total) clearly to the user. Ask if they approve the plan. DO NOT book anything or save the itinerary yet.
+6. Finalize: Once the user explicitly approves the itinerary, FIRST use the save_itinerary tool to store the plan (pass the chosen event_id and the full plan as a JSON string), THEN use book_ticket_transaction to initiate the booking and present the payment link.
+
+2. Artist biography / venue details / general policies
+You do NOT currently have a tool for artist background, genre, popular songs, or venue facilities/capacity. If asked about these, say honestly that you don't have that information right now.
+For general cancellation policy questions (e.g. "What is the cancellation policy?"), answer from the configured LiveWire policy: Movies can be cancelled up to 20 minutes before showtime (75% refund if >= 2 hours, 50% refund if < 2 hours). Concerts/Live events cannot be cancelled. Do not fetch booking history for general policy questions. Never invent artist biography or venue details.
+
+3. get_user_booking_history
+Use ONLY when the user asks about their own previous bookings, booking history, what they booked before, or their past concerts.
+ALWAYS use this tool for such questions - never answer from conversation memory. This tool is the source of truth for the user's booking history. NEVER invent or infer previous bookings from conversation memory.
+
+4. book_ticket_transaction
+Use ONLY when the user explicitly confirms a booking after the assistant has shown the booking summary.
+Examples: "Yes, proceed", "Confirm", "Book it", "Proceed with booking"
+Before calling book_ticket_transaction, you MUST have: event_id, artist/event, date, venue, ticket category, quantity, price.
+For events where get_available_seats returned has_seat_map=true, ask which specific seats the user wants and pass them as seat_numbers (e.g. ["N5", "N6"]) instead of a plain count - or if they say "any 2 seats"/don't care which, pass seats as a count instead and the system auto-picks available ones. For events with has_seat_map=false, always just pass seats as a count.
+NEVER claim that a booking was successful unless book_ticket_transaction actually succeeds.
+After book_ticket_transaction succeeds, provide the booking confirmation and clearly state the booking is reserved/pending until payment is completed via the payment_link - never say it is fully confirmed.
+If book_ticket_transaction fails, clearly tell the user that the booking could not be completed.
+NEVER create a booking merely because the user said "Book 2 VIP tickets..." - first show the booking summary and ask for confirmation.
+
+5. Cancellations (check_cancellation_eligibility and cancel_booking)
+If the user asks a booking-specific cancellation question (e.g., "Can I cancel my Pushpa 2 booking?", "How much will I get if I cancel?"), first use get_user_booking_history to find the exact booking_id. 
+Then call check_cancellation_eligibility with the booking_id to find out the exact refund amount and cancellation fee. NEVER invent these rules or amounts yourself.
+When the user asks to cancel, read out the expected refund amount and EXPLICITLY ask for confirmation (e.g., "Your refund will be Rs X. Would you like me to cancel it?").
+Do NOT cancel immediately when the user only asks if cancellation is possible.
+ONLY after they explicitly confirm ("Yes, cancel it"), use the cancel_booking tool.
+Explain that a successful cancellation automatically implies the refund has been initiated or is pending.
+
+ERROR HANDLING & UNKNOWN TOOLS:
+If you request a tool and receive a response indicating an error, or that the tool is "Unknown" or could not be executed, you MUST NOT claim to the user that the action succeeded. You must inform the user that you encountered an error and could not complete the action.
+"""
+
 SYSTEM_PROMPT = """You are a friendly and helpful ticket booking assistant, similar to BookMyShow — covering concerts, movies, comedy shows, music shows, plays, and sports events.
 Your job is to answer user questions using the correct tool. You MUST use a tool whenever the user's question requires information from the database. Do not guess or invent information.
 
 DOMAIN SCOPE (HARD RULE):
 You are NOT a general-purpose knowledge assistant. You only help with LiveWire concerts, movies, comedy shows, music shows, plays, sports events, tickets, seats, pricing, demand/availability, bookings, cancellations/refunds, and the LiveWire platform itself.
 If the user asks something with no connection to that - general trivia/knowledge (e.g. "what is the national bird of India"), coding help, math, weather, jokes, news, or any other unrelated topic - do NOT answer it, even partially or briefly, and do NOT use any tool for it. Politely say that's outside what you can help with here, and redirect them to LiveWire concerts, events, tickets, or bookings. Do this even if you're confident you know the answer. This rule overrides every other instruction below when there's a conflict.
+IMPORTANT EXCEPTION: Mood-based, vibe-based, or atmosphere-based event queries are ALWAYS valid event search requests, not general knowledge. Phrases like "something chill", "something energetic", "something fun this weekend", "anything romantic", "something relaxing tonight", or any similar expression of a desired atmosphere or feeling are user preferences for what kind of event to attend — treat them exactly like a search query. ALWAYS call search_events for these. Never classify a mood word or atmosphere descriptor as "outside what I can help with".
 
 PERSONALIZATION:
 If the user's message contains a segment like "[User name: Ravi Kumar]", you know their first name — address them naturally and warmly by their first name in your reply (e.g. "Hey Ravi, ..."). Do this in every reply where the tag is present, but keep it natural and varied, not robotic or repetitive-sounding. Never mention the tag itself. If no such tag is present, do not invent or guess a name.
@@ -88,22 +209,43 @@ A user chatting via Telegram may already have an account from the website (booki
 
 TOOL ROUTING RULES:
 
-For any request where the user wants to find, browse, or book a concert,
-movie, comedy show, music show, play, or sports event, ALWAYS call
-search_events before saying that no events are available.
+For ANY request where the user wants to find, browse, or book events — including
+mood/vibe requests, atmosphere requests, genre requests, or any exploration of
+what's available — ALWAYS call search_events FIRST. Never answer from memory.
 
 NEVER say that there are no concerts, movies, or events available unless
-search_events has actually been called and returned no matching upcoming
-events.
+search_events has actually been called and returned no results.
+
+MOOD AND ATMOSPHERE QUERIES (CRITICAL):
+When the user uses mood words, vibes, adjectives, or atmosphere descriptions
+(e.g. "fun", "chill", "romantic", "energetic", "relaxing", "exciting", "lively",
+"peaceful", "party", "upbeat", "mellow", "thrilling") to describe what kind of
+event they want — treat those words exactly like a search query. Pass them
+directly as the query parameter to search_events. Examples:
+  - "something chill" → search_events(query="chill")
+  - "show me fun events" → search_events(query="fun")
+  - "anything romantic" → search_events(query="romantic")
+  - "something chill and electronic this weekend" → search_events(query="chill electronic", temporal_intent="THIS_WEEKEND")
+  - "upcoming fun events" → search_events(query="fun")
+  - "something energetic in Mumbai" → search_events(query="energetic", city="Mumbai")
+
+FALLBACK RULE — if a mood/atmosphere/vibe search returns 0 results:
+Do NOT immediately tell the user there is nothing available. Instead, make a
+SECOND call: search_events with NO query parameter (and keep only the
+temporal/city filters if present). Then present those general results to the
+user with a brief, helpful note that you couldn't find events specifically
+matching their mood but here's what's coming up. For example:
+  "I couldn't find events specifically tagged as 'chill and electronic', but
+   here's what's happening this weekend — any of these catch your eye?"
+Never give up after a single 0-result search.
 
 If the user wants to book an event but has not specified an artist, event,
-or city, use search_events without query/city to find upcoming events when
-possible. If clarification is needed, ask for the artist, event, or city.
+or city, use search_events without query/city to find upcoming events.
 
 1. search_events / get_ticket_categories
-Use for: upcoming concerts, concert dates, event locations, event status, ticket availability, ticket prices, ticket categories, "which concerts are available" questions.
-Examples: "Show me Arijit Singh concerts", "Are there any upcoming Arijit Singh concerts?", "Which concerts are available in Mumbai?", "How much are tickets?"
-For any event, concert, date, availability, ticket, pricing, or schedule question, you MUST use these tools.
+Use for: upcoming concerts, concert dates, event locations, event status, ticket availability, ticket prices, ticket categories, "which concerts are available" questions, AND all mood/vibe/atmosphere/genre browsing.
+Examples: "Show me Arijit Singh concerts", "Are there any upcoming Arijit Singh concerts?", "Which concerts are available in Mumbai?", "How much are tickets?", "show me something fun", "anything romantic this week", "I want something chill"
+For any event, concert, date, availability, ticket, pricing, schedule, or mood/vibe question, you MUST use these tools.
 
 IMPORTANT - multiple showtimes: the same movie/artist can appear MORE THAN ONCE in search_events results at the exact same venue and date, differing only by event_time (e.g. a 7pm show and a separate 9pm show) - these are completely different event_ids with their own independent ticket categories, prices, and seat maps. Each search_events result line includes its event_time - read it carefully. If the user names a specific time ("the 9pm show"), you MUST match the event_id whose event_time corresponds to that, not just the first or only one matching the movie/venue/date. If the user hasn't specified a time and more than one showtime exists for what they asked about, ASK which time before calling get_ticket_categories/get_available_seats/advise_seats/book_ticket_transaction - never guess or default to whichever one appears first. Two showtimes of the same title are NEVER interchangeable: one may have has_seat_map=true and the other has_seat_map=false, one may be sold out while the other isn't, and their ticket categories/prices can differ. Never merge or average data across showtimes, and never apply information from one showtime's event_id (e.g. seat map, availability) to the other.
 
@@ -336,6 +478,15 @@ def classify_intent(message: str, history: list[types.Content]) -> IntentClassif
     Lightweight pre-flight semantic classifier.
     Determines intent and whether previous conversation context is needed.
     """
+    # 1. Heuristic pre-filter for basic greetings/closings
+    msg_clean = message.lower().strip()
+    if msg_clean in {"hi", "hello", "hey", "good morning", "good afternoon", "good evening", "how are you"}:
+        logger.info("Heuristic match: GREETING")
+        return IntentClassification(intent="GREETING", context_needed=False)
+    if msg_clean in {"bye", "goodbye", "see you", "see you later", "take care", "thanks", "thank you"}:
+        logger.info("Heuristic match: CLOSING")
+        return IntentClassification(intent="CLOSING", context_needed=False)
+
     prompt = """Classify the user's message into exactly one of the following intents:
 - GREETING: The message is ONLY a greeting or opening pleasantry, with no other request in it (e.g. "hi", "hy", "hello", "good morning", "good afternoon", "good evening", "how are you", "nice to meet you"). Natural spelling variations, typos, and other languages/phrasings that express the same thing also count.
 - CLOSING: The message is ONLY a farewell / closing pleasantry, with no other request in it (e.g. "bye", "goodbye", "see you", "see you later", "take care", "thanks", "thank you"). Natural spelling variations and other phrasings that express the same thing also count.
@@ -352,6 +503,11 @@ CRITICAL — mixed messages: A greeting or closing word is very often just a ple
 Set context_needed to true ONLY if the user's query relies on previous conversation (e.g. "Which one is cheaper?", "book the second one").
 If the user's query is a brand new independent search (e.g. "Find Bollywood concerts", "events in Mumbai"), set context_needed to false.
 If there is no recent context provided, context_needed MUST be false.
+
+OUTPUT FORMAT:
+Return a single line of raw text containing the intent name and the boolean context_needed value, separated by a comma.
+Example: EVENT_SEARCH,false
+Example: FOLLOW_UP,true
 """
     # Just grab the last couple of turns for context
     recent_history = ""
@@ -372,30 +528,59 @@ If there is no recent context provided, context_needed MUST be false.
                 ])
             ],
             config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=IntentClassification,
+                response_mime_type="text/plain",
             )
         )
-        data = json.loads(res.text)
-        logger.info(f"Classifier result: {data}")
-        return IntentClassification(**data)
+        text_resp = res.text.strip()
+        parts = [p.strip() for p in text_resp.split(",")]
+        if len(parts) >= 2:
+            intent_val = parts[0]
+            context_val = parts[1].lower() == "true"
+            logger.info(f"Classifier result (raw): {text_resp}")
+            return IntentClassification(intent=intent_val, context_needed=context_val)
+        else:
+            raise ValueError(f"Failed to parse LLM raw response: {text_resp}")
     except Exception as e:
         logger.error(f"Intent classification failed: {e}")
         return IntentClassification(intent="UNKNOWN", context_needed=True)
 
 
-async def _run(effective_user_id: str, session_id: str, name: str, is_admin: bool, message: str, chat_id: str | None) -> str:
+async def _run(effective_user_id: str, session_id: str, name: str, is_admin: bool, message: str, chat_id: str | None, history: list[types.Content] | None = None) -> str:
     from datetime import datetime
     from zoneinfo import ZoneInfo
     now = datetime.now(ZoneInfo("Asia/Kolkata"))
     current_date_str = now.strftime("%Y-%m-%d %H:%M:%S")
     enriched_message = f"[Current Date (Asia/Kolkata): {current_date_str}] [User name: {name}] [User is_admin: {is_admin}] {message}"
 
-    history = memory.load_history("customer", effective_user_id, session_id)
+    if history is None:
+        history = memory.load_history("customer", effective_user_id, session_id)
     
-    # Pre-flight intent classification
-    classification = classify_intent(message, history)
-
+    # Run DB fetch and embedding concurrently
+    import asyncio
+    import contextvars
+    from app.services.embedding_service import generate_query_embedding
+    
+    async def get_classification():
+        return await asyncio.to_thread(classify_intent, message, history)
+        
+    async def get_embedding():
+        return await asyncio.to_thread(generate_query_embedding, message)
+        
+    classification, emb = await asyncio.gather(get_classification(), get_embedding())
+    
+    # Fire and forget helper for saving turns
+    def _fire_and_forget_save(reply_text: str):
+        async def _save():
+            try:
+                await asyncio.to_thread(memory.save_turn, "customer", effective_user_id, session_id, message, reply_text)
+            except Exception as e:
+                logger.error(f"Failed to background save turn: {e}")
+        asyncio.create_task(_save())
+    
+    # Store embedding in a context var so search_events can pick it up without passing it as a tool param
+    if not hasattr(_run, "emb_ctx"):
+        _run.emb_ctx = contextvars.ContextVar('emb_ctx', default=None)
+    _run.emb_ctx.set({"message": message, "embedding": emb})
 
     # Demand query detection – treat as FOLLOW_UP with context_needed=True
     if _is_demand_query(message):
@@ -461,14 +646,14 @@ async def _run(effective_user_id: str, session_id: str, name: str, is_admin: boo
             "I can help you find concerts, movies, comedy shows, or other events, check ticket prices "
             "and availability, or manage your bookings. What would you like to do?"
         )
-        memory.save_turn("customer", effective_user_id, session_id, message, reply)
+        _fire_and_forget_save(reply)
         return reply
 
     if classification.intent == "CLOSING":
         logger.info("CLOSING intent detected – short-circuiting before gemini_loop.run_agent()")
         who = f", {name}" if name else ""
         reply = f"Take care{who}! Come back anytime you want to find or book an event."
-        memory.save_turn("customer", effective_user_id, session_id, message, reply)
+        _fire_and_forget_save(reply)
         return reply
 
     if not classification.context_needed:
@@ -482,21 +667,145 @@ async def _run(effective_user_id: str, session_id: str, name: str, is_admin: boo
 
     reply = await gemini_loop.run_agent(
         system_prompt=SYSTEM_PROMPT,
+        iter1_system_prompt=ROUTING_SYSTEM_PROMPT,
         function_declarations=FUNCTION_DECLARATIONS,
         tool_handlers=handlers,
         history=history,
         user_message=enriched_message,
     )
 
-    memory.save_turn("customer", effective_user_id, session_id, message, reply)
+    if "The AI service is temporarily unavailable" not in reply and "Sorry, I had to stop" not in reply:
+        _fire_and_forget_save(reply)
     return reply
 
 
 async def handle_website_message(user_id: str, session_id: str, message: str) -> str:
     """Entry point for the website chat widget - user_id comes from an
     already-verified Supabase Auth JWT (see chat_routes.py)."""
-    name, is_admin = _resolve_website_user(user_id)
-    return await _run(user_id, session_id, name, is_admin, message, chat_id=None)
+    import asyncio
+    
+    async def get_user():
+        return await asyncio.to_thread(_resolve_website_user, user_id)
+        
+    async def get_history():
+        return await asyncio.to_thread(memory.load_history, "customer", user_id, session_id)
+        
+    (name, is_admin), history = await asyncio.gather(get_user(), get_history())
+    
+    return await _run(user_id, session_id, name, is_admin, message, chat_id=None, history=history)
+
+async def _run_stream(
+    user_id: str,
+    session_id: str,
+    name: str | None,
+    is_admin: bool,
+    message: str,
+    chat_id: str | None = None,
+    history: list[dict] | None = None,
+):
+    import asyncio
+    import contextvars
+    from app.services.embedding_service import generate_query_embedding
+
+    effective_user_id = user_id if not is_admin else f"admin_{user_id}"
+    logger.info(f"Agent stream started for {effective_user_id}")
+
+    # Start saving user message to history immediately
+    async def _save_user_msg():
+        try:
+            await asyncio.to_thread(memory.save_turn, "customer", effective_user_id, session_id, message, None)
+        except Exception as e:
+            logger.error(f"Failed to save user turn: {e}")
+    save_task = asyncio.create_task(_save_user_msg())
+
+    t_start = asyncio.get_event_loop().time()
+    classification_task = asyncio.create_task(asyncio.to_thread(classify_intent, message, history))
+    embed_task = asyncio.create_task(asyncio.to_thread(generate_query_embedding, message))
+
+    classification, emb = await asyncio.gather(classification_task, embed_task)
+    
+    t_end = asyncio.get_event_loop().time()
+    logger.info(f"Parallel intent & embedding took {(t_end - t_start)*1000:.1f}ms")
+
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    current_date_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    enriched_message = f"[Current Date (Asia/Kolkata): {current_date_str}] [User name: {name}] [User is_admin: {is_admin}] {message}"
+
+    if classification.intent == "OUT_OF_DOMAIN":
+        logger.info("OUT_OF_DOMAIN intent detected – short-circuiting")
+        reply = "I'm sorry, but I can only assist with LiveWire concerts, movies, events, tickets, and bookings. How can I help you with those?"
+        yield reply
+        await save_task
+        asyncio.create_task(asyncio.to_thread(memory.save_turn, "customer", effective_user_id, session_id, None, reply))
+        return
+
+    if classification.intent == "GREETING":
+        logger.info("GREETING intent detected – short-circuiting")
+        who = f" {name}" if name else ""
+        reply = (
+            f"Hey{who}! I'm LiveWire's booking assistant. "
+            "I can help you find concerts, movies, comedy shows, or other events, check ticket prices "
+            "and availability, or manage your bookings. What would you like to do?"
+        )
+        yield reply
+        await save_task
+        asyncio.create_task(asyncio.to_thread(memory.save_turn, "customer", effective_user_id, session_id, None, reply))
+        return
+
+    if classification.intent == "CLOSING":
+        logger.info("CLOSING intent detected – short-circuiting")
+        who = f", {name}" if name else ""
+        reply = f"Take care{who}! Come back anytime you want to find or book an event."
+        yield reply
+        await save_task
+        asyncio.create_task(asyncio.to_thread(memory.save_turn, "customer", effective_user_id, session_id, None, reply))
+        return
+
+    if not hasattr(_run, "emb_ctx"):
+        _run.emb_ctx = contextvars.ContextVar('emb_ctx', default=None)
+    _run.emb_ctx.set({"message": message, "embedding": emb})
+
+    if not classification.context_needed:
+        if history:
+            logger.info("Context not needed but prior history exists – retaining it for potential follow‑up.")
+        else:
+            logger.info("Context not needed. Dropping history for this request.")
+            history = []
+
+    handlers = _build_bound_handlers(effective_user_id, chat_id)
+    
+    full_reply = []
+    
+    async for chunk in gemini_loop.run_agent_stream(
+        system_prompt=SYSTEM_PROMPT,
+        iter1_system_prompt=ROUTING_SYSTEM_PROMPT,
+        function_declarations=FUNCTION_DECLARATIONS,
+        tool_handlers=handlers,
+        history=history,
+        user_message=enriched_message,
+    ):
+        full_reply.append(chunk)
+        yield chunk
+
+    await save_task
+    final_reply = "".join(full_reply)
+    if "The AI service is temporarily unavailable" not in final_reply and "Sorry, I had to stop" not in final_reply:
+        asyncio.create_task(asyncio.to_thread(memory.save_turn, "customer", effective_user_id, session_id, None, final_reply))
+
+async def handle_website_message_stream(user_id: str, session_id: str, message: str):
+    import asyncio
+    async def get_user():
+        return await asyncio.to_thread(_resolve_website_user, user_id)
+    async def get_history():
+        return await asyncio.to_thread(memory.load_history, "customer", user_id, session_id)
+    
+    (name, is_admin), history = await asyncio.gather(get_user(), get_history())
+    
+    async for chunk in _run_stream(user_id, session_id, name, is_admin, message, chat_id=None, history=history):
+        yield chunk
+
 
 
 async def handle_telegram_message(chat_id: str, telegram_name: str | None, message: str) -> str:

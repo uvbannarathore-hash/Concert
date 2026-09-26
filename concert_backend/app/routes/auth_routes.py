@@ -23,6 +23,7 @@ class UpdateProfileRequest(BaseModel):
     phone: str | None = Field(default=None, pattern=r"^\+?[0-9\s\-]{7,15}$")
     city: str | None = None
     address: str | None = None
+    payout_upi_id: str | None = None
 
 
 class LoginRequest(BaseModel):
@@ -85,13 +86,18 @@ def signup(request: Request, payload: SignupRequest):
 @router.get("/me")
 def get_my_profile(current_user: dict = Depends(get_current_user)):
     """
-    Returns the logged-in user's profile info (name, phone, city, address,
-    email, is_admin) - used by the frontend for personalized greetings, the
-    Edit Profile page, and to decide whether to show the Admin link.
+    Returns the logged-in user's profile info — used by the frontend for
+    personalized greetings, the Edit Profile page, admin link visibility,
+    and the organizer dashboard gate (is_organizer, plan_tier, payout fields).
     """
     result = (
         supabase_admin.table("users")
-        .select("name, phone, city, address, email, is_admin")
+        .select(
+            "name, phone, city, address, email, is_admin, "
+            "is_organizer, plan_tier, plan_expiry_date, "
+            "payout_upi_id, payout_bank_account, payout_ifsc, "
+            "is_plus_member, plus_plan_type, plus_expiry_date"
+        )
         .eq("user_id", current_user["user_id"])
         .execute()
     )
@@ -105,6 +111,15 @@ def get_my_profile(current_user: dict = Depends(get_current_user)):
         "city": profile.get("city"),
         "address": profile.get("address"),
         "is_admin": profile.get("is_admin", False),
+        "is_organizer": profile.get("is_organizer", False),
+        "plan_tier": profile.get("plan_tier", "starter"),
+        "plan_expiry_date": profile.get("plan_expiry_date"),
+        "payout_upi_id": profile.get("payout_upi_id"),
+        "payout_bank_account": profile.get("payout_bank_account"),
+        "payout_ifsc": profile.get("payout_ifsc"),
+        "is_plus_member": bool(profile.get("is_plus_member")),
+        "plus_plan_type": profile.get("plus_plan_type"),
+        "plus_expiry_date": profile.get("plus_expiry_date"),
     }
 
 

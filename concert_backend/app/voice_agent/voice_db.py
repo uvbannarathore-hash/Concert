@@ -180,12 +180,30 @@ def search_events(query: str | None = None, city: str | None = None, temporal_in
     if query:
         # If the query is literally "sold out" or similar, the AI might pass it. 
         # But we still run it through pgvector just in case there's semantic meaning.
-        embedding = generate_query_embedding(query)
+        import app.agents.customer_agent
+        emb_ctx = getattr(app.agents.customer_agent._run, "emb_ctx", None)
+        ctx = emb_ctx.get() if emb_ctx else None
+        
+        if ctx and isinstance(ctx, dict) and ctx.get("message", "").strip().lower() == query.strip().lower():
+            embedding = ctx.get("embedding")
+        else:
+            embedding = generate_query_embedding(query)
+            
         if embedding:
-            rpc = supabase_admin.rpc(
-                "match_events",
-                {"query_embedding": embedding, "match_threshold": 0.6, "match_count": 20},
-            ).execute()
+            # Pass start_date / end_date directly into the RPC so date pre-filtering
+            # happens INSIDE the DB before LIMIT is applied.  This prevents the
+            # post-filtering trap where all 20 candidates fall outside the window.
+            rpc_params: dict = {
+                "query_embedding": embedding,
+                "match_threshold": 0.65,
+                "match_count": 20,
+            }
+            if start_date:
+                rpc_params["start_date"] = start_date
+            if end_date:
+                rpc_params["end_date"] = end_date
+
+            rpc = supabase_admin.rpc("match_events", rpc_params).execute()
             if rpc.data:
                 candidate_ids = [m["event_id"] for m in rpc.data]
                 similarity_rank = {m["event_id"]: m["similarity"] for m in rpc.data}
@@ -207,7 +225,7 @@ def search_events(query: str | None = None, city: str | None = None, temporal_in
         )
     )
 
-    if status_filter:
+    if status_filter and status_filter != "Cancelled":
         q = q.eq("status", status_filter)
     else:
         q = q.in_("status", ["Upcoming", "Sold Out"])
@@ -240,6 +258,14 @@ def search_events(query: str | None = None, city: str | None = None, temporal_in
     else:
         rows.sort(key=lambda r: r["event_date"])
 
+    # Bulk check seat maps to avoid N+1 query pattern
+    seat_mapped_events = set()
+    if rows:
+        event_ids = [r["event_id"] for r in rows]
+        seat_res = supabase_admin.table("event_seats").select("event_id").in_("event_id", event_ids).execute()
+        if seat_res.data:
+            seat_mapped_events = {row["event_id"] for row in seat_res.data}
+
     lines = []
     for r in rows:
         cats = r.get("ticket_categories") or []
@@ -247,8 +273,8 @@ def search_events(query: str | None = None, city: str | None = None, temporal_in
         price_str = f"[{cat_details}]" if cat_details else "price TBA"
         status_tag = " [SOLD OUT]" if r.get("status") == "Sold Out" else ""
         
-        has_seat_map = _event_has_seat_map(r['event_id'])
-        logger.info(f"DEBUG has_seat_map decision: event_id={r['event_id']}, event_name={r['artist_name']}, has_seat_map={has_seat_map}, source: event_seats table (_event_has_seat_map)")
+        has_seat_map = r['event_id'] in seat_mapped_events
+        logger.info(f"DEBUG has_seat_map decision: event_id={r['event_id']}, event_name={r['artist_name']}, has_seat_map={has_seat_map}, source: batched event_seats table")
         map_str = "true" if has_seat_map else "false"
         
         lines.append(

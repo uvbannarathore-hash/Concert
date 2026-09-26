@@ -50,6 +50,9 @@ def get_cancellation_eligibility(booking_id: str, user_id: str) -> dict:
     if booking["status"] == "Cancelled":
         return {"eligible": False, "reason": "Booking is already cancelled.", "refund_amount": 0}
 
+    if booking["status"] == "Transferred":
+        return {"eligible": False, "reason": "Transferred tickets cannot be cancelled.", "refund_amount": 0}
+
     if booking["payment_status"] != "Paid":
         return {"eligible": False, "reason": "Booking is not paid, cancellation and refund are not applicable.", "refund_amount": 0}
 
@@ -125,6 +128,16 @@ def get_cancellation_eligibility(booking_id: str, user_id: str) -> dict:
             amount = 0.0
 
     amount = float(amount)
+    
+    # Add fees from ledger so we refund the full amount paid by the user
+    try:
+        ledger_res = supabase_admin.table("booking_ledger").select("user_fee, user_fee_gst").eq("booking_id", booking_id).execute()
+        if ledger_res.data:
+            ledger = ledger_res.data[0]
+            amount += float(ledger["user_fee"]) + float(ledger["user_fee_gst"])
+    except Exception as e:
+        pass
+
     refund_amount = (amount * refund_percentage) / 100.0
     refund_amount_paise = int(round(refund_amount * 100))
 
@@ -571,6 +584,36 @@ def initiate_cancellation(booking_id: str, user_id: str) -> dict:
             supabase_admin.table("coupons").update({"is_active": False}).eq("source_group_session_id", session_id).execute()
     except Exception as e:
         print(f"Failed to revoke group booking reward for {booking_id}: {e}")
+        
+    # Auto-cancel any active resale listings tied to this booking
+    try:
+        supabase_admin.table("ticket_resale_listings").update({"status": "Cancelled"}).eq("booking_id", booking_id).eq("status", "Active").execute()
+    except Exception as e:
+        print(f"Failed to auto-cancel active resale listings for {booking_id}: {e}")
+
+    # Update booking_ledger and adjustments
+    try:
+        ledger_check = supabase_admin.table("booking_ledger").select("*").eq("booking_id", booking_id).execute()
+        if ledger_check.data:
+            ledger = ledger_check.data[0]
+            payout_status = ledger.get("payout_status")
+            
+            supabase_admin.table("booking_ledger").update({"payout_status": "refunded", "updated_at": "now()"}).eq("booking_id", booking_id).execute()
+            
+            if payout_status == "paid":
+                org_res = supabase_admin.table("events").select("organizer_id").eq("event_id", booking["event_id"]).execute()
+                org_id = org_res.data[0].get("organizer_id") if org_res.data else None
+                if org_id:
+                    supabase_admin.table("booking_ledger_adjustments").insert({
+                        "booking_id": booking_id,
+                        "organizer_id": org_id,
+                        "adjustment_type": "clawback",
+                        "amount": -float(ledger["organizer_payout"]),
+                        "reason": f"cancelled after payout, booking {booking_id}",
+                        "status": "pending"
+                    }).execute()
+    except Exception as e:
+        print(f"Failed to update booking ledger for cancellation {booking_id}: {e}")
 
     return {
         "success": True,

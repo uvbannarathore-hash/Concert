@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import { createClient } from '@supabase/supabase-js'
+import SoldTicketsList from '../components/SoldTicketsList'
 
 // Publishable key only - safe for frontend use.
 const supabase = createClient(
@@ -19,6 +20,14 @@ export default function ProfilePage() {
   const [city, setCity] = useState('')
   const [address, setAddress] = useState('')
   const [email, setEmail] = useState('')
+  const [payoutUpiId, setPayoutUpiId] = useState('')
+
+  // Subscription state
+  const [isPlusMember, setIsPlusMember] = useState(false)
+  const [plusPlanType, setPlusPlanType] = useState('')
+  const [plusExpiryDate, setPlusExpiryDate] = useState('')
+  const [waiverSlotsUsed, setWaiverSlotsUsed] = useState(0)
+  const [waiverSlotsTotal, setWaiverSlotsTotal] = useState(4)
 
   const [notifyTelegramForWebsite, setNotifyTelegramForWebsite] = useState(false)
   const [hasTelegramLinked, setHasTelegramLinked] = useState(false)
@@ -33,6 +42,19 @@ export default function ProfilePage() {
         setCity(data.city || '')
         setAddress(data.address || '')
         setEmail(data.email || '')
+        setPayoutUpiId(data.payout_upi_id || '')
+        setIsPlusMember(data.is_plus_member || false)
+        setPlusPlanType(data.plus_plan_type || '')
+        setPlusExpiryDate(data.plus_expiry_date || '')
+        
+        if (data.is_plus_member) {
+          api.getMembershipStatus().then((statusData) => {
+            if (statusData.is_active) {
+              setWaiverSlotsUsed(statusData.waiver_slots_used || 0)
+              setWaiverSlotsTotal(statusData.waiver_slots_total || 4)
+            }
+          }).catch(console.error)
+        }
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false))
@@ -61,7 +83,7 @@ export default function ProfilePage() {
     setInfo('')
     setSaving(true)
     try {
-      await api.updateProfile({ name, phone, city, address })
+      await api.updateProfile({ name, phone, city, address, payout_upi_id: payoutUpiId })
       setInfo('Profile successfully updated.')
     } catch (err) {
       setError(err.message)
@@ -110,6 +132,43 @@ export default function ProfilePage() {
         <p className="text-xs text-haze mt-1">Configure your personal information and contact details</p>
       </div>
 
+      {isPlusMember && (
+        <div className="mb-8 bg-spot/10 border border-spot/30 rounded-2xl p-6 flex flex-col sm:flex-row items-start sm:items-center justify-between shadow-xl shadow-spot/5">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-spot"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg></span>
+              <h2 className="text-lg font-bold text-white uppercase tracking-wider">LiveWire Plus</h2>
+            </div>
+            <p className="text-sm text-haze">
+              You are on the <strong className="text-paper">{plusPlanType}</strong> pass.
+            </p>
+            {plusExpiryDate && (
+              <p className="text-xs text-haze/70 mt-2">
+                Valid until: <span className="text-white font-mono">{new Date(plusExpiryDate).toLocaleDateString()}</span>
+              </p>
+            )}
+            
+            <div className="mt-4 bg-stage/50 rounded-lg p-3 border border-white/[0.04]">
+              <p className="text-xs uppercase tracking-widest text-haze mb-2">Free Bookings This Month</p>
+              <div className="flex items-center gap-3">
+                <div className="flex-grow h-2 bg-black/50 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-spot rounded-full transition-all duration-500"
+                    style={{ width: `${(waiverSlotsUsed / waiverSlotsTotal) * 100}%` }}
+                  ></div>
+                </div>
+                <span className="text-sm font-mono text-paper whitespace-nowrap">
+                  {Math.max(0, waiverSlotsTotal - waiverSlotsUsed)} / {waiverSlotsTotal} left
+                </span>
+              </div>
+            </div>
+          </div>
+          <a href="/pricing" className="mt-6 sm:mt-0 ml-0 sm:ml-6 shrink-0 px-6 py-3 rounded-full text-xs uppercase tracking-widest font-bold bg-white/[0.04] text-paper hover:bg-white/[0.08] transition-colors">
+            Manage Plan
+          </a>
+        </div>
+      )}
+
       <form onSubmit={handleSave} className="glass-card bg-stage/15 border border-white/[0.04] rounded-2xl p-6 space-y-5 shadow-2xl">
         <div>
           <label className="block text-xs font-mono text-haze/60 mb-2 uppercase">Account Email (ReadOnly)</label>
@@ -156,6 +215,16 @@ export default function ProfilePage() {
             onChange={(e) => setAddress(e.target.value)}
             placeholder="e.g. 123 MG Road, Near City Mall"
             required
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-mono text-haze/60 mb-2 uppercase">Payout UPI ID (For Ticket Resales)</label>
+          <input
+            className="field"
+            value={payoutUpiId}
+            onChange={(e) => setPayoutUpiId(e.target.value)}
+            placeholder="e.g. username@upi"
           />
         </div>
 
@@ -214,7 +283,18 @@ export default function ProfilePage() {
             Link your Telegram account (via the assistant) to enable Telegram notifications for website bookings too.
           </p>
         )}
+        )}
       </div>
+
+      {/* Sold Tickets & Payouts */}
+      <div className="mt-8">
+        <div className="mb-4">
+          <h2 className="text-sm font-bold text-paper uppercase tracking-wide">Sold Tickets & Pending Payouts</h2>
+          <p className="text-xs text-haze mt-1">Track your marketplace sales and expected payouts.</p>
+        </div>
+        <SoldTicketsList />
+      </div>
+
     </div>
   )
 }

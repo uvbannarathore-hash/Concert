@@ -14,6 +14,7 @@ import TicketPassPage from './pages/TicketPassPage'
 import ListYourShowPage from './pages/ListYourShowPage'
 import ArtistProfilePage from './pages/ArtistProfilePage'
 import VenueProfilePage from './pages/VenueProfilePage'
+import PricingPage from './pages/PricingPage'
 import GroupInvitePage from './pages/GroupInvitePage'
 import GroupJoinPage from './pages/GroupJoinPage'
 import ChatWidget from './components/ChatWidget'
@@ -40,6 +41,7 @@ export default function App() {
           <Route path="/login" element={<AuthPage />} />
           <Route path="/auth/callback" element={<AuthCallbackPage />} />
           <Route path="/complete-profile" element={<CompleteProfilePage />} />
+          <Route path="/pricing" element={<PricingPage />} />
           <Route
             path="/bookings"
             element={

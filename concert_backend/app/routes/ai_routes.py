@@ -47,13 +47,16 @@ async def search_events(payload: SearchRequest, request: Request):
         if not query_embedding:
             raise HTTPException(status_code=500, detail="Failed to generate embedding for query")
             
-        # Call RPC (blocking, run in thread)
+        # Call RPC (blocking, run in thread) — threshold set to 0.65
+        # (tighter than the original 0.60 to reduce low-quality matches,
+        # but loose enough to handle natural-language mood queries like
+        # "some good events" or "something chill").
         def run_rpc():
             return supabase_anon.rpc(
                 "match_events",
                 {
                     "query_embedding": query_embedding,
-                    "match_threshold": 0.6,
+                    "match_threshold": 0.65,
                     "match_count": 50
                 }
             ).execute()
@@ -63,9 +66,20 @@ async def search_events(payload: SearchRequest, request: Request):
         matches = rpc_result.data
         if not matches:
             return {"results": []}
-            
+
+        # Deduplicate event_ids while preserving similarity order.
+        # The same event can appear multiple times if it has multiple showtimes
+        # that each got their own embedding row.
+        seen_ids: set[str] = set()
+        unique_matches = []
+        for m in matches:
+            eid = m["event_id"]
+            if eid not in seen_ids:
+                seen_ids.add(eid)
+                unique_matches.append(m)
+
         # Fetch the CURRENT event rows for these IDs
-        event_ids = [m["event_id"] for m in matches]
+        event_ids = [m["event_id"] for m in unique_matches]
         
         # Fetch CURRENT event rows — explicit field list to exclude the embedding vector
         FIELDS = (
@@ -88,7 +102,7 @@ async def search_events(payload: SearchRequest, request: Request):
         
         # Preserve similarity ranking from the RPC, filter active, limit to 20
         ranked_results = []
-        for m in matches:
+        for m in unique_matches:
             event_id = m["event_id"]
             if event_id in current_events:
                 event_data = current_events[event_id]

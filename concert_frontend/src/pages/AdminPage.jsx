@@ -25,6 +25,7 @@ export default function AdminPage() {
   const [submissionsLoading, setSubmissionsLoading] = useState(false)
   const [submissionFilter, setSubmissionFilter] = useState('Pending')
   const [processingSubmissionId, setProcessingSubmissionId] = useState(null)
+  const [platformRevenue, setPlatformRevenue] = useState(0)
 
   // Coupons
   const emptyCoupon = { code: '', discount_type: 'percentage', discount_value: '', max_uses: '', max_uses_per_user: 1, event_id: '', valid_from: '', valid_until: '' }
@@ -78,6 +79,11 @@ export default function AdminPage() {
     async function loadSessions() {
       const adminId = localStorage.getItem('user_id')
       if (!adminId) return
+
+      api.adminGetPlatformRevenue()
+        .then(res => setPlatformRevenue(res.total_platform_revenue || 0))
+        .catch(console.error)
+
       
       const { data } = await supabase
         .from('admin_chat_history')
@@ -539,8 +545,15 @@ export default function AdminPage() {
           <p className="text-xs text-haze mt-1">Deploy listings, customize prices, and coordinate bookings</p>
         </div>
         
-        {/* Notification Bell */}
-        <div className="relative">
+        {/* Platform Revenue */}
+        <div className="flex gap-4 items-center">
+          <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl px-4 py-2 flex flex-col items-end justify-center text-right shadow-inner">
+            <span className="text-[10px] font-mono text-haze uppercase tracking-widest">Platform Net</span>
+            <span className="text-xl text-go font-semibold leading-tight font-display tracking-wider">₹{platformRevenue.toLocaleString()}</span>
+          </div>
+
+          {/* Notification Bell */}
+          <div className="relative">
           <button
             onClick={() => setShowNotificationsModal(true)}
             className="p-3 text-haze hover:text-paper hover:bg-white/[0.04] rounded-full transition relative border border-white/[0.04] bg-stage"
@@ -554,6 +567,7 @@ export default function AdminPage() {
               </span>
             )}
           </button>
+        </div>
         </div>
       </div>
       

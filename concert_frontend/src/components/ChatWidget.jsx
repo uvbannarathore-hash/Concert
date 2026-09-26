@@ -291,14 +291,15 @@ export default function ChatWidget() {
     setError('')
 
     try {
-      const res = await api.chat(text)
-      setMessages((m) => [
-        ...m,
-        {
-          role: 'assistant',
-          text: res.reply,
-        },
-      ])
+      // Add a placeholder message for the assistant
+      setMessages((m) => [...m, { role: 'assistant', text: '' }])
+      for await (const chunk of api.chatStream(text)) {
+        setMessages((m) => {
+          const newM = [...m];
+          newM[newM.length - 1].text += chunk;
+          return newM;
+        });
+      }
     } catch (err) {
       setError(err.message)
     } finally {

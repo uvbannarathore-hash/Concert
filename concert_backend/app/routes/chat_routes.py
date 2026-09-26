@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from app.auth import get_current_user
 from app.agents import customer_agent
@@ -31,3 +32,23 @@ async def chat(payload: ChatRequest, current_user: dict = Depends(get_current_us
         message=payload.message,
     )
     return {"reply": reply}
+
+@router.post("/stream")
+async def chat_stream(payload: ChatRequest, current_user: dict = Depends(get_current_user)):
+    """
+    Streaming endpoint for the customer assistant.
+    """
+    if current_user.get("is_admin"):
+        raise HTTPException(
+            status_code=403,
+            detail="Admin accounts should use the Admin dashboard's agent chat instead.",
+        )
+
+    return StreamingResponse(
+        customer_agent.handle_website_message_stream(
+            user_id=current_user["user_id"],
+            session_id=payload.session_id,
+            message=payload.message,
+        ),
+        media_type="text/plain"
+    )

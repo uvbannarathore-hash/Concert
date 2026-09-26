@@ -183,6 +183,34 @@ export const api = {
       body: { message, session_id: getSessionId() },
     }),
 
+  chatStream: async function* (message) {
+    const token = getToken();
+    if (!token) throw new Error('Not logged in');
+    
+    const res = await fetch(`${BASE_URL}/chat/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({ message, session_id: getSessionId() })
+    });
+    
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      const msg = data.detail ? (typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)) : `Request failed (${res.status})`;
+      throw new Error(msg);
+    }
+    
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      yield decoder.decode(value, { stream: true });
+    }
+  },
+
   myBookings: () => request('/bookings/me', { auth: true }),
 
   createOrder: (event_id, category, seats, coupon_code) =>
@@ -216,6 +244,8 @@ export const api = {
     request('/auth/me', { method: 'PATCH', auth: true, body: { name, phone, city, address } }),
 
   getWishlist: () => request('/wishlist', { auth: true }),
+  
+  getPendingPayouts: () => request('/payouts/pending', { auth: true }),
 
   addToWishlist: (eventId) =>
     request('/wishlist', { method: 'POST', auth: true, body: { event_id: eventId } }),
@@ -321,6 +351,8 @@ export const api = {
     return res.json()
   },
 
+  adminGetPlatformRevenue: () => request('/admin/platform-revenue', { auth: true }),
+
   // Reviews
   createReview: (event_id, rating, review_text) =>
     request('/reviews', { method: 'POST', auth: true, body: { event_id, rating, review_text } }),
@@ -357,7 +389,27 @@ export const api = {
   acceptGroupInvite: (inviteId) => request(`/group-invite/${inviteId}/accept`, { method: 'POST', auth: true }),
   declineGroupInvite: (inviteId) => request(`/group-invite/${inviteId}/decline`, { method: 'POST', auth: true }),
   claimGroupInvite: (shareToken) => request(`/group-invite/claim/${shareToken}`, { method: 'POST', auth: true }),
+
+  // Resale
+  listResaleTicket: (payload) => request('/resale/list', { method: 'POST', auth: true, body: payload }),
+  getResaleTickets: (eventId) => request(`/resale/events/${eventId}/tickets`),
+  createResaleOrder: (listingId) => request('/resale/create-order', { method: 'POST', auth: true, body: { listing_id: listingId } }),
+  buyResaleTicket: (payload) => request('/resale/buy', { method: 'POST', auth: true, body: payload }),
+  cancelResaleListing: (listingId) => request(`/resale/${listingId}/cancel`, { method: 'POST', auth: true }),
+  getMyResaleListings: () => request('/resale/my-listings', { auth: true }),
+  getMySoldTickets: () => request('/resale/my-sold-tickets', { auth: true }),
+
+  // --- Organizer Endpoints ---
+  upgradePlan: (plan_tier) => request('/organizer/plan/upgrade', { method: 'POST', body: { plan_tier }, auth: true }),
+  verifyPlanUpgrade: (payload) => request('/organizer/plan/upgrade/verify', { method: 'POST', body: payload, auth: true }),
+  updatePayoutDetails: (payload) => request('/organizer/payout-details', { method: 'PATCH', body: payload, auth: true }),
+
+  // --- LiveWire Plus Membership ---
+  getMembershipStatus: () => request('/membership/status', { auth: true }),
+  subscribePlus: (plan_type) => request('/membership/subscribe', { method: 'POST', body: { plan_type }, auth: true }),
+  verifyPlusSubscription: (payload) => request('/membership/subscribe/verify', { method: 'POST', body: payload, auth: true }),
 }
+
 
 export function getPublicPassUrl(bookingId) {
   // If a public URL (e.g. Vercel deployment or tunnel URL) is set, use it for mobile data compatibility

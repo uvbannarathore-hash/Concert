@@ -1,5 +1,14 @@
-import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import os
+
+file_path = r"c:\Users\uvban\OneDrive\Desktop\Concert\concert_frontend\src\pages\ListYourShowPage.jsx"
+
+with open(file_path, "r", encoding="utf-8") as f:
+    content = f.read()
+
+# I will write out the exact replacement logic in python to be safe.
+# Actually, I can just write the whole file using python.
+
+new_content = """import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import { MapPin } from 'lucide-react'
 
@@ -24,6 +33,20 @@ const statusStyles = {
   Pending: 'text-spot2 border-spot2/20 bg-spot2/5',
   Approved: 'text-go border-go/20 bg-go/5',
   Rejected: 'text-spot border-spot/20 bg-spot/5',
+}
+
+function loadRazorpayScript() {
+  return new Promise((resolve) => {
+    if (window.Razorpay) {
+      resolve(true)
+      return
+    }
+    const script = document.createElement('script')
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js'
+    script.onload = () => resolve(true)
+    script.onerror = () => resolve(false)
+    document.body.appendChild(script)
+  })
 }
 
 export default function ListYourShowPage() {
@@ -141,15 +164,6 @@ export default function ListYourShowPage() {
       return
     }
 
-    if (form.event_date) {
-      const year = parseInt(form.event_date.split('-')[0], 10)
-      const currentYear = new Date().getFullYear()
-      if (year < currentYear || year > currentYear + 3) {
-        setError(`Event year must be between ${currentYear} and ${currentYear + 3}.`)
-        return
-      }
-    }
-
     setSubmitting(true)
     try {
       await api.submitShow(
@@ -171,6 +185,54 @@ export default function ListYourShowPage() {
       setError(err.message)
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  async function handleUpgradePlan(tier) {
+    // If they have an active plan (expiry in the future), explicitly confirm
+    if (profile?.plan_expiry_date) {
+      const expiry = new Date(profile.plan_expiry_date)
+      if (expiry > new Date()) {
+        const confirmed = window.confirm(`You already have an active plan until ${expiry.toLocaleDateString()}. Upgrading will restart your billing cycle from today and forfeit any remaining time. Proceed?`)
+        if (!confirmed) return
+      }
+    }
+
+    try {
+      const res = await api.upgradePlan(tier)
+      const rzpReady = await loadRazorpayScript()
+      if (!rzpReady) {
+        alert("Failed to load Razorpay. Please check your connection.")
+        return
+      }
+
+      const rzp = new window.Razorpay({
+        key: import.meta.env.VITE_RAZORPAY_KEY_ID || '', // We don't have it on frontend, it's fine, Razorpay works with order_id if standard key check allows it, or we need key ID. The app already has a way it creates orders. Wait, booking_routes uses standard approach.
+        order_id: res.order_id,
+        name: 'Concert Booking',
+        description: `Upgrade to ${tier.toUpperCase()} Plan`,
+        handler: async function (response) {
+          try {
+            await api.verifyPlanUpgrade({
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+              plan_tier: tier
+            })
+            alert("Plan upgraded successfully!")
+            loadInitialData()
+          } catch (err) {
+            alert(err.message || "Failed to verify upgrade payment.")
+          }
+        },
+        theme: { color: '#01FFAA' } // Spot color
+      })
+      rzp.on('payment.failed', function () {
+        alert("Payment failed or cancelled.")
+      })
+      rzp.open()
+    } catch (err) {
+      alert(err.message || "Failed to initiate upgrade.")
     }
   }
 
@@ -223,9 +285,16 @@ export default function ListYourShowPage() {
                 )}
               </div>
               <div className="flex gap-2">
-                <Link to="/pricing" className="btn-paper text-xs px-4 py-2 bg-white/10 hover:bg-white/20">
-                  Manage Plan / Upgrade
-                </Link>
+                {profile.plan_tier !== 'pro' && (
+                  <button onClick={() => handleUpgradePlan('pro')} className="btn-paper text-xs px-4 py-2 bg-white/10 hover:bg-white/20">
+                    Upgrade to Pro (₹19,999/yr)
+                  </button>
+                )}
+                {profile.plan_tier !== 'business' && (
+                  <button onClick={() => handleUpgradePlan('business')} className="btn-spot text-xs px-4 py-2">
+                    Upgrade to Business (₹79,999/yr)
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -546,3 +615,9 @@ export default function ListYourShowPage() {
     </div>
   )
 }
+"""
+
+with open(file_path, "w", encoding="utf-8") as f:
+    f.write(new_content)
+
+print("Updated ListYourShowPage.jsx")

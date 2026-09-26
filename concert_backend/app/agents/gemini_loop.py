@@ -55,6 +55,7 @@ _client = genai.Client(api_key=GEMINI_API_KEY)
 
 async def run_agent(
     system_prompt: str,
+    iter1_system_prompt: str,
     function_declarations: list[dict],
     tool_handlers: dict,
     history: list[types.Content],
@@ -75,10 +76,7 @@ async def run_agent(
     ]
 
     tools = types.Tool(function_declarations=function_declarations)
-    config = types.GenerateContentConfig(
-        system_instruction=system_prompt,
-        tools=[tools],
-    )
+    # config is now created inside the loop
     
     executed_calls = set()
 
@@ -87,6 +85,14 @@ async def run_agent(
     for _ in range(MAX_TOOL_ITERATIONS):
         try:
             rough_char_count = len(str(contents))
+            
+            # Use pruned prompt for Iter 1 (when _ == 0) to speed up tool selection,
+            # use full prompt for Iter 2+ so it knows how to format the text reply.
+            current_prompt = iter1_system_prompt if _ == 0 else system_prompt
+            config = types.GenerateContentConfig(
+                system_instruction=current_prompt,
+                tools=[tools],
+            )
             
             response = generate_content_with_fallback(
                 model=MODEL_NAME,
@@ -170,3 +176,95 @@ async def run_agent(
         "Sorry, that request needed too many steps and I couldn't finish it. "
         "Could you try rephrasing it or breaking it into smaller steps?"
     )
+
+async def run_agent_stream(
+    system_prompt: str,
+    iter1_system_prompt: str,
+    function_declarations: list[dict],
+    tool_handlers: dict,
+    history: list[types.Content],
+    user_message: str,
+):
+    from google import genai
+    from app.config import GEMINI_API_KEY
+    _async_client = genai.Client(api_key=GEMINI_API_KEY)
+    
+    contents = list(history) + [
+        types.Content(role="user", parts=[types.Part.from_text(text=user_message)])
+    ]
+    tools = types.Tool(function_declarations=function_declarations)
+    executed_calls = set()
+    import asyncio
+
+    for _ in range(MAX_TOOL_ITERATIONS):
+        try:
+            current_prompt = iter1_system_prompt if _ == 0 else system_prompt
+            config = types.GenerateContentConfig(
+                system_instruction=current_prompt,
+                tools=[tools],
+            )
+            
+            if _ > 0:
+                # ITER-2: stream the final text response
+                try:
+                    async for chunk in _async_client.aio.models.generate_content_stream(
+                        model=MODEL_NAME,
+                        contents=contents,
+                        config=config
+                    ):
+                        if chunk.text:
+                            yield chunk.text
+                    return
+                except Exception as stream_e:
+                    logger.warning(f"Streaming failed, falling back to blocking. Error: {stream_e}")
+                    pass # Fall back to blocking below
+            
+            response = generate_content_with_fallback(
+                model=MODEL_NAME,
+                contents=contents,
+                config=config,
+            )
+        except Exception as e:
+            err_str = str(e)
+            logger.error(f"AI generation failed completely: {err_str}")
+            yield "The AI service is temporarily unavailable due to high demand. Please try again in a few moments."
+            return
+
+        candidate = response.candidates[0]
+        parts = candidate.content.parts or []
+        function_calls = [p.function_call for p in parts if p.function_call]
+
+        if not function_calls:
+            final_text = "".join(p.text for p in parts if p.text)
+            yield final_text or "Sorry, I couldn't come up with a reply for that."
+            return
+
+        contents.append(candidate.content)
+
+        response_parts = []
+        for fc in function_calls:
+            handler = tool_handlers.get(fc.name)
+            args = dict(fc.args) if fc.args else {}
+            hashable_args = _make_hashable(args)
+            call_signature = (fc.name, hashable_args)
+            if call_signature in executed_calls:
+                result = {"error": "You already called this tool with these exact arguments in this turn. Use the data from the previous response."}
+            elif handler is None:
+                result = {"error": f"Unknown tool: {fc.name}"}
+            else:
+                try:
+                    if inspect.iscoroutinefunction(handler):
+                        result = await handler(**args)
+                    else:
+                        result = handler(**args)
+                except Exception as e:
+                    result = {"error": str(e)}
+                executed_calls.add(call_signature)
+
+            response_parts.append(
+                types.Part.from_function_response(name=fc.name, response={"result": result})
+            )
+            
+        contents.append(types.Content(role="user", parts=response_parts))
+
+    yield "Sorry, I had to stop because I was using too many tools."

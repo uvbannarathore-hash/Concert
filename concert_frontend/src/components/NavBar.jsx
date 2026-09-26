@@ -105,6 +105,7 @@ export default function NavBar() {
         {/* Desktop Navigation Links */}
         <nav className="hidden md:flex items-center gap-6 font-body text-sm font-medium">
           <Link to="/" className={`${activeClass('/')} transition-all duration-200`}>Browse</Link>
+          <Link to="/pricing" className={`${activeClass('/pricing')} transition-all duration-200`}>Pricing</Link>
           {loggedIn && (
             <>
               <Link to="/wishlist" className={`${activeClass('/wishlist')} transition-all duration-200`}>Wishlist</Link>
@@ -200,6 +201,7 @@ export default function NavBar() {
           </div>
 
           <Link to="/" className="text-base font-medium text-paper py-1 border-b border-white/[0.02]">Browse</Link>
+          <Link to="/pricing" className="text-base font-medium text-paper py-1 border-b border-white/[0.02]">Pricing</Link>
           {loggedIn ? (
             <>
               <Link to="/wishlist" className="text-base font-medium text-paper py-1 border-b border-white/[0.02]">Wishlist</Link>

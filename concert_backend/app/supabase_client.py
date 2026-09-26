@@ -15,11 +15,13 @@ _original_async_client_init = httpx.AsyncClient.__init__
 @wraps(_original_client_init)
 def _patched_client_init(self, *args, **kwargs):
     kwargs["http2"] = False
+    kwargs.pop("proxy", None)
     _original_client_init(self, *args, **kwargs)
 
 @wraps(_original_async_client_init)
 def _patched_async_client_init(self, *args, **kwargs):
     kwargs["http2"] = False
+    kwargs.pop("proxy", None)
     _original_async_client_init(self, *args, **kwargs)
 
 httpx.Client.__init__ = _patched_client_init

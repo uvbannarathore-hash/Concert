@@ -287,26 +287,33 @@ def approve_show_submission(submission_id: int, background_tasks: BackgroundTask
     if row["status"] != "Pending":
         raise HTTPException(status_code=400, detail=f"Submission is already {row['status']}, not Pending")
 
+    from datetime import datetime
+    try:
+        year = int(row["event_date"].split("-")[0])
+        current_year = datetime.now().year
+        if not (current_year <= year <= current_year + 3):
+            raise HTTPException(status_code=400, detail=f"Cannot approve: Event year {year} must be between {current_year} and {current_year + 3}.")
+    except (ValueError, IndexError, AttributeError):
+        raise HTTPException(status_code=400, detail="Cannot approve: Invalid event_date format in submission.")
+
     event_id = f"EVT{uuid.uuid4().hex[:12]}"
     
     normalized_artist_name = row["artist_name"].strip()
     
-    # If the event is a Movie, Play, or Sports (no specific lead performer), 
-    # we don't force a dummy artist record.
-    if row["event_type"] in ["Movie", "Play", "Sports"]:
-        artist_id = None
+    # Always get-or-create an artists row regardless of event_type.
+    # For Movies/Plays/Sports the artist_name is the film/production title.
+    # We cannot pass NULL here — events.artist_id is NOT NULL.
+    artist_res = supabase_admin.table("artists").select("artist_id").eq("name", normalized_artist_name).execute()
+    
+    if artist_res.data:
+        artist_id = artist_res.data[0]["artist_id"]
     else:
-        artist_res = supabase_admin.table("artists").select("artist_id").eq("name", normalized_artist_name).execute()
-        
-        if artist_res.data:
-            artist_id = artist_res.data[0]["artist_id"]
-        else:
-            hash_str = hashlib.md5(normalized_artist_name.lower().encode('utf-8')).hexdigest()
-            artist_id = f"ART_{hash_str[:10].upper()}"
-            supabase_admin.table("artists").insert({
-                "artist_id": artist_id,
-                "name": normalized_artist_name,
-            }).execute()
+        hash_str = hashlib.md5(normalized_artist_name.lower().encode('utf-8')).hexdigest()
+        artist_id = f"ART_{hash_str[:10].upper()}"
+        supabase_admin.table("artists").insert({
+            "artist_id": artist_id,
+            "name": normalized_artist_name,
+        }).execute()
     normalized_venue_name = row["venue_name"].strip()
     normalized_city = row["city"].strip()
     
@@ -354,6 +361,16 @@ def approve_show_submission(submission_id: int, background_tasks: BackgroundTask
             "created_event_id": event_id,
         }
     ).eq("id", submission_id).execute()
+
+    # Update organizer fields and description
+    supabase_admin.table("events").update({
+        "organizer_id": row["submitted_by_user_id"],
+        "description": row.get("description")
+    }).eq("event_id", event_id).execute()
+
+    supabase_admin.table("users").update({
+        "is_organizer": True
+    }).eq("user_id", row["submitted_by_user_id"]).eq("is_organizer", False).execute()
 
     # Schedule embedding generation in background (consistent with create_event)
     event_row_for_embedding = {
@@ -674,3 +691,16 @@ def resolve_pricing_notification(notification_id: str, payload: ResolveNotificat
         return {"message": "Price updated successfully", "notification": upd.data[0]}
         
     raise HTTPException(status_code=400, detail="Invalid action")
+
+@router.get("/platform-revenue")
+def get_platform_revenue(admin=Depends(get_current_admin)):
+    """
+    Returns the total platform net revenue collected across all bookings.
+    Only accessible by admins.
+    """
+    try:
+        res = supabase_admin.table("booking_ledger").select("platform_net").execute()
+        total_revenue = sum(float(row.get("platform_net", 0)) for row in res.data)
+        return {"total_platform_revenue": total_revenue}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
