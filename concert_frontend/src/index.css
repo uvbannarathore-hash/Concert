@@ -102,4 +102,8 @@
   .ticket-cutout-left {
     background-image: radial-gradient(circle at 0px 50%, transparent 10px, #151320 11px);
   }
+
+  .map-tiles {
+    filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
+  }
 }

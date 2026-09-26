@@ -283,7 +283,6 @@ export default function ProfilePage() {
             Link your Telegram account (via the assistant) to enable Telegram notifications for website bookings too.
           </p>
         )}
-        )}
       </div>
 
       {/* Sold Tickets & Payouts */}

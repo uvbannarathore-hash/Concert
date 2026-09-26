@@ -27,6 +27,25 @@ def get_buy_advice_endpoint(event_id: str):
         raise HTTPException(status_code=400, detail=result["error"])
     return result
 
+@router.get("/my-itineraries")
+async def get_my_itineraries(current_user: dict = Depends(get_current_user)):
+    from app.supabase_client import supabase_admin
+    # Fetch user itineraries
+    res = supabase_admin.table("user_itineraries").select("*").eq("user_id", current_user["user_id"]).order("created_at", desc=True).execute()
+    itineraries = res.data
+    
+    # Fetch associated events
+    if itineraries:
+        event_ids = list(set(itin["event_id"] for itin in itineraries))
+        events_res = supabase_admin.table("events").select("event_id, artist_name, event_date, venue_name").in_("event_id", event_ids).execute()
+        events_map = {event["event_id"]: event for event in events_res.data}
+        
+        # Merge events data into itineraries
+        for itin in itineraries:
+            itin["events"] = events_map.get(itin["event_id"], None)
+            
+    return {"results": itineraries}
+
 @router.post("/search", response_model=SearchResponse)
 async def search_events(payload: SearchRequest, request: Request):
     query = payload.query.strip()

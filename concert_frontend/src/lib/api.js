@@ -246,6 +246,11 @@ export const api = {
   getWishlist: () => request('/wishlist', { auth: true }),
   
   getPendingPayouts: () => request('/payouts/pending', { auth: true }),
+  
+  // Admin Payout APIs
+  getAdminPayouts: () => request('/admin/payouts', { auth: true }),
+  markPayoutsPaid: (ledger_type, ledger_ids) => 
+    request('/admin/payouts/mark-paid', { method: 'POST', auth: true, body: { ledger_type, ledger_ids } }),
 
   addToWishlist: (eventId) =>
     request('/wishlist', { method: 'POST', auth: true, body: { event_id: eventId } }),
@@ -383,6 +388,7 @@ export const api = {
 
   // Buy Advice Demand Signal
   getBuyAdvice: (eventId) => request(`/ai/events/${eventId}/buy-advice`),
+  getMyItineraries: () => request('/ai/my-itineraries', { auth: true }),
 
   // Group Bookings
   getGroupInvite: (inviteId) => request(`/group-invite/${inviteId}`),

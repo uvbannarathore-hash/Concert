@@ -207,7 +207,7 @@ async def run_agent_stream(
             if _ > 0:
                 # ITER-2: stream the final text response
                 try:
-                    async for chunk in _async_client.aio.models.generate_content_stream(
+                    async for chunk in await _async_client.aio.models.generate_content_stream(
                         model=MODEL_NAME,
                         contents=contents,
                         config=config

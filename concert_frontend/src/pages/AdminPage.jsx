@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { adminApi } from '../lib/adminApi'
 import { api } from '../lib/api'
 import { supabase } from '../lib/supabaseClient'
-import { Bot, BarChart3, Calendar, Ticket, Receipt, Tag, Inbox, Armchair, Mic, Building2, MapPin, Paperclip, Settings } from 'lucide-react'
+import AdminPayoutsTab from '../components/AdminPayoutsTab'
+import { Bot, BarChart3, Calendar, Ticket, Receipt, Tag, Inbox, Armchair, Mic, Building2, MapPin, Paperclip, Settings, CreditCard } from 'lucide-react'
 import AnalyticsDashboard from '../components/AnalyticsDashboard'
 
 const emptyEvent = {
@@ -681,6 +682,7 @@ export default function AdminPage() {
             { id: 'seatmap', label: 'Seat Layout', icon: Armchair },
             { id: 'artists', label: 'Artists', icon: Mic },
             { id: 'venues', label: 'Venues', icon: Building2 },
+            { id: 'payouts', label: 'Payouts', icon: CreditCard },
           ].map((item) => {
             const Icon = item.icon
             return (
@@ -1550,6 +1552,10 @@ export default function AdminPage() {
                 })}
               </div>
             </div>
+          )}
+
+          {tab === 'payouts' && (
+            <AdminPayoutsTab />
           )}
 
         </div>

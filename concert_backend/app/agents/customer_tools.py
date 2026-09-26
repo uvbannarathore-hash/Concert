@@ -782,7 +782,8 @@ def maps_directions(event_id: str, destination_lat: float, destination_lon: floa
                 "estimated_time_mins": round(time_mins),
                 "estimated_cab_fare_inr": round(cab_fare),
                 "mode": "driving",
-                "is_fallback": False
+                "is_fallback": False,
+                "uber_deep_link": f"https://m.uber.com/ul/?action=setPickup&dropoff[latitude]={destination_lat}&dropoff[longitude]={destination_lon}"
             }
     except Exception as e:
         logger.error(f"OSRM failed: {e}")
@@ -807,7 +808,8 @@ def maps_directions(event_id: str, destination_lat: float, destination_lon: floa
         "estimated_cab_fare_inr": round(cab_fare),
         "mode": "driving",
         "is_fallback": True,
-        "message": "Used estimated straight-line routing due to OSM routing unavailability."
+        "message": "Used estimated straight-line routing due to OSM routing unavailability.",
+        "uber_deep_link": f"https://m.uber.com/ul/?action=setPickup&dropoff[latitude]={destination_lat}&dropoff[longitude]={destination_lon}"
     }
 
 @lru_cache(maxsize=128)
@@ -856,7 +858,8 @@ def restaurant_suggestions(event_id: str, budget_inr: float = 1500) -> dict:
                             "lat": r_lat,
                             "lon": r_lon,
                             "estimated_cost_for_two_inr": base_cost,
-                            "is_cost_estimated": True
+                            "is_cost_estimated": True,
+                            "google_maps_url": f"https://www.google.com/maps/dir/?api=1&destination={r_lat},{r_lon}"
                         })
             
             if restaurants:
@@ -872,9 +875,9 @@ def restaurant_suggestions(event_id: str, budget_inr: float = 1500) -> dict:
         "is_fallback": True,
         "message": "Live OSM restaurant search unavailable; returning fallback suggestions.",
         "restaurants": [
-            {"name": "The Grand Local (Fallback)", "cuisine": "North Indian", "lat": lat + 0.001, "lon": lon + 0.001, "estimated_cost_for_two_inr": 1200, "is_cost_estimated": True},
-            {"name": "Spice Route (Fallback)", "cuisine": "Pan Asian", "lat": lat - 0.002, "lon": lon + 0.002, "estimated_cost_for_two_inr": 1800, "is_cost_estimated": True},
-            {"name": "Bistro Cafe (Fallback)", "cuisine": "Continental", "lat": lat + 0.003, "lon": lon - 0.001, "estimated_cost_for_two_inr": 800, "is_cost_estimated": True}
+            {"name": "The Grand Local (Fallback)", "cuisine": "North Indian", "lat": lat + 0.001, "lon": lon + 0.001, "estimated_cost_for_two_inr": 1200, "is_cost_estimated": True, "google_maps_url": f"https://www.google.com/maps/dir/?api=1&destination={lat + 0.001},{lon + 0.001}"},
+            {"name": "Spice Route (Fallback)", "cuisine": "Pan Asian", "lat": lat - 0.002, "lon": lon + 0.002, "estimated_cost_for_two_inr": 1800, "is_cost_estimated": True, "google_maps_url": f"https://www.google.com/maps/dir/?api=1&destination={lat - 0.002},{lon + 0.002}"},
+            {"name": "Bistro Cafe (Fallback)", "cuisine": "Continental", "lat": lat + 0.003, "lon": lon - 0.001, "estimated_cost_for_two_inr": 800, "is_cost_estimated": True, "google_maps_url": f"https://www.google.com/maps/dir/?api=1&destination={lat + 0.003},{lon - 0.001}"}
         ]
     }
 
@@ -1115,7 +1118,7 @@ FUNCTION_DECLARATIONS = [
             "type": "object",
             "properties": {
                 "event_id": {"type": "string", "description": "The event_id associated with this itinerary."},
-                "plan_json": {"type": "string", "description": "A JSON-formatted string detailing the full itinerary (event, restaurant, travel, budget)."}
+                "plan_json": {"type": "string", "description": "A JSON-formatted string detailing the full itinerary. MUST strictly follow this structure: {\"grand_total_inr\": 1234, \"venue_lat\": 19.0760, \"venue_lon\": 72.8777, \"restaurant_options\": [{\"name\": \"Restaurant\", \"cuisine\": \"Type\", \"estimated_cost_for_two_inr\": 1000, \"lat\": 19.0800, \"lon\": 72.8800, \"google_maps_url\": \"\"}], \"travel_directions\": {\"estimated_time_mins\": 10, \"distance_km\": 5, \"estimated_cab_fare_inr\": 200, \"uber_deep_link\": \"\"}}"}
             },
             "required": ["event_id", "plan_json"]
         }

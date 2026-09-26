@@ -296,7 +296,11 @@ export default function ChatWidget() {
       for await (const chunk of api.chatStream(text)) {
         setMessages((m) => {
           const newM = [...m];
-          newM[newM.length - 1].text += chunk;
+          const lastIdx = newM.length - 1;
+          newM[lastIdx] = {
+            ...newM[lastIdx],
+            text: newM[lastIdx].text + chunk
+          };
           return newM;
         });
       }

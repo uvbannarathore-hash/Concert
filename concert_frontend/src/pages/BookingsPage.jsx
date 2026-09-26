@@ -5,6 +5,8 @@ import { api, getPublicPassUrl } from '../lib/api'
 import { MapPin, Ticket } from 'lucide-react'
 import DigitalPassModal from '../components/DigitalPassModal'
 import ReviewModal from '../components/ReviewModal'
+import ItineraryTimeline from '../components/ItineraryTimeline'
+import { ErrorBoundary } from '../components/ErrorBoundary'
 
 const statusStyles = {
   Confirmed: 'text-go border-go/20 bg-go/5',
@@ -247,7 +249,7 @@ export default function BookingsPage() {
   }
 
   return (
-    <>
+    <ErrorBoundary>
       <div className="max-w-6xl mx-auto px-6 py-12 animate-fade-in-up">
       
       {/* Header section */}
@@ -514,6 +516,18 @@ export default function BookingsPage() {
           load()
         }}
       />
+      
+      {/* AI Itineraries Section */}
+      <div className="mt-20">
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8 border-b border-white/[0.04] pb-6">
+          <div>
+            <p className="eyebrow mb-1">Your AI Concierge Plans</p>
+            <h2 className="font-display text-4xl tracking-wide uppercase text-paper">PLAN MY NIGHT</h2>
+          </div>
+        </div>
+        <ItineraryTimeline />
+      </div>
+
       </div>
 
       {/* Custom Cancellation Modal */}
@@ -615,6 +629,6 @@ export default function BookingsPage() {
           </div>
         </div>
       )}
-    </>
+    </ErrorBoundary>
   )
 }
