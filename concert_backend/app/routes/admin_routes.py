@@ -126,6 +126,8 @@ async def admin_chat(
     return {"reply": reply}
 
 
+from pydantic import BaseModel, field_validator
+
 # ---------- Events ----------
 
 class CreateEventRequest(BaseModel):
@@ -140,6 +142,18 @@ class CreateEventRequest(BaseModel):
     description: str | None = None
     latitude: float | None = None
     longitude: float | None = None
+    trailer_url: str | None = None
+
+    @field_validator('trailer_url')
+    @classmethod
+    def validate_youtube_url(cls, v: str | None) -> str | None:
+        if not v:
+            return v
+        import re
+        pattern = r'(?:https?://)?(?:www\.|m\.)?(?:youtube\.com/(?:watch\?v=|embed/|shorts/)|youtu\.be/)([a-zA-Z0-9_-]{11})'
+        if not re.search(pattern, v):
+            raise ValueError("Invalid YouTube URL")
+        return v
 
 
 @router.post("/events")
@@ -176,6 +190,7 @@ def create_event(payload: CreateEventRequest, background_tasks: BackgroundTasks,
         "status": "Upcoming",
         "latitude": payload.latitude,
         "longitude": payload.longitude,
+        "trailer_url": payload.trailer_url,
     }
     supabase_admin.table("events").insert(event_row).execute()
     background_tasks.add_task(_generate_and_store_embedding, event_id, event_row)

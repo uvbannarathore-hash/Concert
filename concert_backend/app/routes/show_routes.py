@@ -8,7 +8,7 @@ covers the organizer-facing submit + view-own-history actions.
 
 import time
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from app.auth import get_current_user
 from app.supabase_client import supabase_admin
 
@@ -35,6 +35,18 @@ class ShowSubmissionIn(BaseModel):
     organizer_notes: str | None = None
     latitude: float | None = None
     longitude: float | None = None
+    trailer_url: str | None = None
+
+    @field_validator('trailer_url')
+    @classmethod
+    def validate_youtube_url(cls, v: str | None) -> str | None:
+        if not v:
+            return v
+        import re
+        pattern = r'(?:https?://)?(?:www\.|m\.)?(?:youtube\.com/(?:watch\?v=|embed/|shorts/)|youtu\.be/)([a-zA-Z0-9_-]{11})'
+        if not re.search(pattern, v):
+            raise ValueError("Invalid YouTube URL")
+        return v
 
 
 @router.post("/submit")
@@ -123,6 +135,7 @@ async def submit_show(
                 "organizer_contact_name": data.organizer_contact_name,
                 "organizer_contact_phone": data.organizer_contact_phone,
                 "organizer_notes": data.organizer_notes,
+                "trailer_url": data.trailer_url,
                 "status": "Pending",
             }
         )

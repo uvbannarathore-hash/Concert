@@ -49,6 +49,7 @@ def update_event(
     latitude: str = None,
     longitude: str = None,
     description: str = None,
+    trailer_url: str = None,
     generated_description: str = None,
 ) -> dict:
     global _last_generated_description
@@ -74,6 +75,7 @@ def update_event(
         "latitude": latitude,
         "longitude": longitude,
         "description": description,
+        "trailer_url": trailer_url,
     }
     # Only send fields the admin actually mentioned - leave the rest untouched, matching the n8n tool's "leave unchanged if not mentioned" instruction.
     fields = {k: v for k, v in fields.items() if v is not None}
@@ -166,6 +168,7 @@ def create_event1(
     image_url: str = None,
     latitude: float = None,
     longitude: float = None,
+    trailer_url: str = None,
 ) -> dict:
     """
     Creates a new event with any number of ticket categories, via the
@@ -218,6 +221,13 @@ def create_event1(
     ).execute()
     
     rpc_result = result.data
+    
+    # If trailer_url was provided, update it separately to avoid needing an RPC signature change
+    if trailer_url and isinstance(rpc_result, dict) and rpc_result.get("status") == "success":
+        try:
+            supabase_admin.table("events").update({"trailer_url": trailer_url}).eq("event_id", event_id).execute()
+        except Exception as e:
+            logger.error(f"Failed to update trailer_url for newly created event {event_id}: {e}")
     
     # Generate and store embedding so it's instantly searchable
     try:
@@ -367,6 +377,7 @@ FUNCTION_DECLARATIONS = [
                 "latitude": {"type": "string", "description": "New venue latitude, from a [Venue Location: lat,lng] segment if present."},
                 "longitude": {"type": "string", "description": "New venue longitude, from a [Venue Location: lat,lng] segment if present."},
                 "description": {"type": "string", "description": "New event description, typically generated via generate_event_description."},
+                "trailer_url": {"type": "string", "description": "New YouTube trailer URL if provided by the admin."},
             },
             "required": ["event_id"],
         },
@@ -463,6 +474,7 @@ FUNCTION_DECLARATIONS = [
                 "image_url": {"type": "string", "description": "Poster image URL, from an [Uploaded image URL: ...] segment if present."},
                 "latitude": {"type": "number", "description": "Venue latitude, from a [Venue Location: lat,lng] segment if present."},
                 "longitude": {"type": "number", "description": "Venue longitude, from a [Venue Location: lat,lng] segment if present."},
+                "trailer_url": {"type": "string", "description": "YouTube trailer URL if provided by the admin."},
             },
             "required": ["event_id", "artist_name", "venue_id", "venue_name", "city", "event_date", "event_time", "event_type", "categories"],
         },

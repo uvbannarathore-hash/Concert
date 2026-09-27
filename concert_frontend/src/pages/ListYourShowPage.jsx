@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
 import { MapPin } from 'lucide-react'
+import { extractYoutubeVideoId } from '../utils/youtube'
 
 const EVENT_TYPES = ['Concert', 'Movie', 'Comedy Show', 'Music Show', 'Play', 'Sports']
 
@@ -18,6 +19,7 @@ const emptyForm = {
   organizer_contact_name: '',
   organizer_contact_phone: '',
   organizer_notes: '',
+  trailer_url: '',
 }
 
 const statusStyles = {
@@ -139,6 +141,14 @@ export default function ListYourShowPage() {
     if (cleanCategories.length === 0) {
       setError('Add at least one ticket category with a name.')
       return
+    }
+    
+    if (form.trailer_url && form.trailer_url.trim() !== '') {
+      const extractedId = extractYoutubeVideoId(form.trailer_url);
+      if (!extractedId) {
+        setError('Invalid YouTube Trailer URL. Please provide a valid youtube.com or youtu.be link.')
+        return
+      }
     }
 
     if (form.event_date) {
@@ -389,6 +399,17 @@ export default function ListYourShowPage() {
             accept="image/*"
             onChange={(e) => setImageFile(e.target.files?.[0] || null)}
             className="text-xs text-haze file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-spot/10 file:text-spot file:text-xs"
+          />
+        </div>
+
+        <div>
+          <label className="text-[10px] uppercase tracking-wider text-haze/60 block mb-1">YouTube Trailer URL (optional)</label>
+          <input
+            type="url"
+            value={form.trailer_url}
+            onChange={(e) => updateField('trailer_url', e.target.value)}
+            className="w-full bg-void border border-white/[0.06] rounded-lg px-3 py-2 text-sm text-paper focus:outline-none focus:border-spot/40"
+            placeholder="e.g. https://youtube.com/watch?v=..."
           />
         </div>
 

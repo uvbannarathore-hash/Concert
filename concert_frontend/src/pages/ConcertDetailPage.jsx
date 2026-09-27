@@ -5,6 +5,8 @@ import { api, getPublicPassUrl } from '../lib/api'
 import { MapPin, CheckCircle2 } from 'lucide-react'
 import DigitalPassModal from '../components/DigitalPassModal'
 import ReviewList from '../components/ReviewList'
+import TrailerModal from '../components/TrailerModal'
+import { extractYoutubeVideoId } from '../utils/youtube'
 
 function loadRazorpayScript() {
   return new Promise((resolve) => {
@@ -57,6 +59,7 @@ export default function ConcertDetailPage() {
   const [confirmedId, setConfirmedId] = useState('')
   const [showPassModal, setShowPassModal] = useState(false)
   const [paymentId, setPaymentId] = useState('')
+  const [showTrailerModal, setShowTrailerModal] = useState(false)
 
   // --- Seat map (interactive picker) state — only used for events where
   // an admin has built a seat layout (see AdminPage's Seat Layout tab).
@@ -122,7 +125,8 @@ export default function ConcertDetailPage() {
               city: data.event.city,
               event_date: data.event.event_date,
               event_time: data.event.event_time,
-              event_type: data.event.event_type
+              event_type: data.event.event_type,
+              trailer_url: data.event.trailer_url
             })
             // Keep max 10
             if (current.length > 10) current = current.slice(0, 10)
@@ -404,6 +408,8 @@ export default function ConcertDetailPage() {
     )
   }
 
+  const trailerVideoId = extractYoutubeVideoId(event?.trailer_url)
+
   const originalTotal = activeTab === 'resale' && selected ? selected.asking_price : (hasSeatMap ? seatCategoryPrice * selectedSeatIds.length : (selected ? selected.price_inr * seats : 0))
   
   // Calculate discount and fees client-side to match backend LiveWire logic
@@ -562,7 +568,7 @@ export default function ConcertDetailPage() {
 
         {/* Left Column: Event details */}
         <div className="md:col-span-7 space-y-6">
-          <div className="relative rounded-2xl overflow-hidden shadow-2xl border border-white/[0.04] aspect-[16/10] bg-void">
+          <div className="relative rounded-2xl overflow-hidden shadow-2xl border border-white/[0.04] aspect-[16/10] bg-void group">
             {event.image_url ? (
               <img
                 src={event.image_url}
@@ -575,6 +581,20 @@ export default function ConcertDetailPage() {
               </div>
             )}
             <div className="absolute inset-0 bg-gradient-to-t from-void via-transparent to-transparent"></div>
+            
+            {trailerVideoId && (
+              <div className="absolute inset-0 flex flex-col justify-end items-start p-6 bg-gradient-to-t from-void/90 via-void/40 to-transparent">
+                <button
+                  onClick={() => setShowTrailerModal(true)}
+                  className="bg-void/60 hover:bg-void backdrop-blur border border-white/10 px-4 py-2 flex items-center gap-2 rounded text-sm text-paper font-bold tracking-widest transition-all group-hover:scale-105"
+                >
+                  <svg className="w-4 h-4 fill-white" viewBox="0 0 24 24">
+                    <path d="M8 5v14l11-7z" />
+                  </svg>
+                  TRAILER
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="space-y-2">
@@ -599,6 +619,11 @@ export default function ConcertDetailPage() {
               {event.description || 'Experience the energy live. Ensure you arrive at least 30 minutes early. Food, beverage, and mockups will be available. Pass is digital-only and subject to strict verification on site.'}
             </p>
           </div>
+          
+          {showTrailerModal && trailerVideoId && (
+            <TrailerModal videoId={trailerVideoId} onClose={() => setShowTrailerModal(false)} />
+          )}
+
 
           {event.latitude != null && event.longitude != null && (
             <div className="border-t border-white/[0.04] pt-6">
