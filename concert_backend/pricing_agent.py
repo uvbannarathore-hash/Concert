@@ -97,9 +97,7 @@ async def main():
         if not eligible_events:
             print("No events exactly > 72h away after precise parsing.")
             return
-
-        admin_history_res = supabase_admin.table("admin_chat_history").select("admin_user_id, session_id").order("created_at", desc=True).limit(1).execute()
-        
+        # Removed global admin_history_res fetch; we will use event.organizer_id
         for item in eligible_events:
             evt = item["event"]
             evt_dt = item["event_dt"]
@@ -117,6 +115,12 @@ async def main():
                 price_inr = float(cat["price_inr"])
                 last_alert_at = cat.get("last_pricing_alert_at")
                 
+                # Dynamically calculate seats if interactive seat map exists
+                seats_res = supabase_admin.table("event_seats").select("status").eq("event_id", event_id).eq("category", category).execute()
+                if seats_res.data and len(seats_res.data) > 0:
+                    total_seats = len(seats_res.data)
+                    available_seats = len([s for s in seats_res.data if s.get("status") == "Available"])
+                
                 # Check 80% capacity condition
                 if total_seats == 0:
                     continue
@@ -131,11 +135,10 @@ async def main():
                         print(f"Cooldown active for event {event_id} category {category}.")
                         continue
                         
-                # Check admin session BEFORE expensive operations (Fix #1)
-                if not admin_history_res.data:
-                    print("No admin chat sessions found to inject notification. Skipping.")
+                # Ensure event has an organizer
+                if not evt.get("organizer_id"):
+                    print(f"No organizer_id found for event {event_id}. Skipping.")
                     continue
-                
                 # Calculate booking velocity in the last 48 hours
                 bookings_res = supabase_admin.table("bookings").select("seats_booked") \
                     .eq("event_id", event_id) \
@@ -217,11 +220,8 @@ async def main():
                     print(f"Concurrency claim failed: another instance already generated an alert for {category}.")
                     continue
                 
-                # Fix #1: Insert to admin_chat_history only after claim, and revert if insert fails
-                recent_admin = admin_history_res.data[0]
-                admin_id = recent_admin["admin_user_id"]
-                session_id = recent_admin["session_id"]
-                
+                # Ensure correct admin is notified
+                admin_id = evt.get("organizer_id")
                 try:
                     insert_res = supabase_admin.table("pricing_notifications").insert({
                         "admin_user_id": admin_id,

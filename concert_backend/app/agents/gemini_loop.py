@@ -204,21 +204,6 @@ async def run_agent_stream(
                 tools=[tools],
             )
             
-            if _ > 0:
-                # ITER-2: stream the final text response
-                try:
-                    async for chunk in await _async_client.aio.models.generate_content_stream(
-                        model=MODEL_NAME,
-                        contents=contents,
-                        config=config
-                    ):
-                        if chunk.text:
-                            yield chunk.text
-                    return
-                except Exception as stream_e:
-                    logger.warning(f"Streaming failed, falling back to blocking. Error: {stream_e}")
-                    pass # Fall back to blocking below
-            
             response = generate_content_with_fallback(
                 model=MODEL_NAME,
                 contents=contents,
@@ -236,7 +221,14 @@ async def run_agent_stream(
 
         if not function_calls:
             final_text = "".join(p.text for p in parts if p.text)
-            yield final_text or "Sorry, I couldn't come up with a reply for that."
+            if not final_text:
+                yield "Sorry, I couldn't come up with a reply for that."
+            else:
+                # Simulate streaming so the UI still looks nice
+                chunk_size = 20
+                for i in range(0, len(final_text), chunk_size):
+                    yield final_text[i:i+chunk_size]
+                    await asyncio.sleep(0.01)
             return
 
         contents.append(candidate.content)

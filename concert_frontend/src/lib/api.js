@@ -291,7 +291,12 @@ export const api = {
   },
 
   myShowSubmissions: () => request('/shows/my-submissions', { auth: true }),
-
+  getPricingNotifications: () => request('/shows/pricing-notifications', { auth: true }),
+  resolvePricingNotification: (id, payload) => request(`/shows/pricing-notifications/${id}`, {
+    method: 'PATCH',
+    auth: true,
+    body: JSON.stringify(payload)
+  }),
   // Seat-map (BookMyShow/PVR-style) - only meaningful for events an admin
   // has built a seat layout for; has_seat_map=false for everything else,
   // in which case the frontend falls back to the plain quantity picker.

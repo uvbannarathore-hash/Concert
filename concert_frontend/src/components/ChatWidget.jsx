@@ -291,18 +291,29 @@ export default function ChatWidget() {
     setError('')
 
     try {
-      // Add a placeholder message for the assistant
-      setMessages((m) => [...m, { role: 'assistant', text: '' }])
+      let isFirstChunk = true;
       for await (const chunk of api.chatStream(text)) {
-        setMessages((m) => {
-          const newM = [...m];
-          const lastIdx = newM.length - 1;
-          newM[lastIdx] = {
-            ...newM[lastIdx],
-            text: newM[lastIdx].text + chunk
-          };
-          return newM;
-        });
+        if (isFirstChunk) {
+          setSending(false); // Hide 'Thinking...' indicator
+          setMessages((m) => [...m, { role: 'assistant', text: chunk }]);
+          isFirstChunk = false;
+        } else {
+          setMessages((m) => {
+            const newM = [...m];
+            const lastIdx = newM.length - 1;
+            newM[lastIdx] = {
+              ...newM[lastIdx],
+              text: newM[lastIdx].text + chunk
+            };
+            return newM;
+          });
+        }
+      }
+      
+      // If the stream completed but yielded nothing, ensure sending is turned off
+      if (isFirstChunk) {
+         setSending(false);
+         setMessages((m) => [...m, { role: 'assistant', text: "Sorry, I couldn't come up with a reply for that." }]);
       }
     } catch (err) {
       setError(err.message)

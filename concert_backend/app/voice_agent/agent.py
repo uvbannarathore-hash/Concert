@@ -445,6 +445,7 @@ CONSTRAINTS:
 - Maximum 25 words per turn. Keep it concise.
 - Never read out the internal event_id.
 - Reply in the caller's language (English, Hindi, Hinglish).
+- CRITICAL: NEVER call book_ticket more than once per turn. If a user asks for tickets, book ONLY the exact category they requested. Do NOT book multiple categories simultaneously.
 """.strip()
 
 class ConcertVoiceAgent(Agent):

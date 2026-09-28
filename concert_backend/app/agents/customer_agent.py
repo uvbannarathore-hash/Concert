@@ -491,7 +491,7 @@ def classify_intent(message: str, history: list[types.Content]) -> IntentClassif
 - GREETING: The message is ONLY a greeting or opening pleasantry, with no other request in it (e.g. "hi", "hy", "hello", "good morning", "good afternoon", "good evening", "how are you", "nice to meet you"). Natural spelling variations, typos, and other languages/phrasings that express the same thing also count.
 - CLOSING: The message is ONLY a farewell / closing pleasantry, with no other request in it (e.g. "bye", "goodbye", "see you", "see you later", "take care", "thanks", "thank you"). Natural spelling variations and other phrasings that express the same thing also count.
 - EVENT_SEARCH: Searching for concerts, events, availability, tickets, prices.
-- USER_DATA: Asking about their own bookings, wishlist, or hosted/submitted shows.
+- USER_DATA: Asking about their own bookings, wishlist, hosted/submitted shows, or linking their Telegram account.
 - FOLLOW_UP: A query that clearly references a previous result ("which one", "the cheapest of those").
 - SEAT_ADVICE: User asks for seat or ticket‑category recommendations (e.g., "best seats", "cheap seats under 2000", "premium seats").
 - PLAN_MY_NIGHT: User asks to plan an evening, dinner, travel, or itinerary (e.g., "Plan my night in Mumbai", "Find an event and a restaurant").

@@ -64,11 +64,17 @@ def get_buy_advice(event_id: str) -> dict:
                 "message": "This event has already passed."
             }
             
-        # Fetch ticket categories to calculate capacity
-        tickets_res = supabase_admin.table("ticket_categories").select("total_seats, available_seats").eq("event_id", event_id).execute()
+        # Check if this event uses an interactive seat map
+        seats_res = supabase_admin.table("event_seats").select("status").eq("event_id", event_id).execute()
         
-        total_capacity = sum((t.get("total_seats") or 0) for t in tickets_res.data)
-        available_seats = sum((t.get("available_seats") or 0) for t in tickets_res.data)
+        if seats_res.data and len(seats_res.data) > 0:
+            total_capacity = len(seats_res.data)
+            available_seats = len([s for s in seats_res.data if s.get("status") == "Available"])
+        else:
+            # Fallback to ticket categories
+            tickets_res = supabase_admin.table("ticket_categories").select("total_seats, available_seats").eq("event_id", event_id).execute()
+            total_capacity = sum((t.get("total_seats") or 0) for t in tickets_res.data)
+            available_seats = sum((t.get("available_seats") or 0) for t in tickets_res.data)
         
         if total_capacity <= 0:
             return {

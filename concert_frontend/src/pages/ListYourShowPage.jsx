@@ -50,6 +50,7 @@ export default function ListYourShowPage() {
   // Payout Details form state
   const [payoutForm, setPayoutForm] = useState({ upi_id: '', bank_account: '', ifsc: '' })
   const [payoutSaving, setPayoutSaving] = useState(false)
+  const [pricingNotifications, setPricingNotifications] = useState([])
 
   useEffect(() => {
     if (!showLocationPicker || locationQuery.trim().length < 3) {
@@ -105,6 +106,19 @@ export default function ListYourShowPage() {
     api.getPendingPayouts()
       .then(setPayouts)
       .catch(console.error)
+      
+    api.getPricingNotifications()
+      .then((res) => setPricingNotifications(res.notifications || []))
+      .catch(console.error)
+  }
+
+  async function handleResolvePricingNotification(id, action, finalPrice = null) {
+    try {
+      await api.resolvePricingNotification(id, { action, final_price: finalPrice })
+      setPricingNotifications(prev => prev.filter(n => n.id !== id))
+    } catch (err) {
+      alert(err.message)
+    }
   }
 
   useEffect(loadInitialData, [])
@@ -239,6 +253,47 @@ export default function ListYourShowPage() {
               </div>
             </div>
           </div>
+
+          {/* Pricing Notifications */}
+          {pricingNotifications.length > 0 && (
+            <div className="bg-stage/20 border border-spot/30 rounded-2xl p-6">
+              <h2 className="font-display text-2xl uppercase tracking-wide text-paper mb-4 flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-spot animate-pulse"></span>
+                Action Required: Dynamic Pricing
+              </h2>
+              <div className="space-y-4">
+                {pricingNotifications.map(notif => (
+                  <div key={notif.id} className="bg-void border border-white/5 rounded-xl p-4">
+                    <div className="flex justify-between items-start mb-2">
+                      <div>
+                        <p className="text-sm font-semibold text-paper">Category: {notif.category}</p>
+                        <p className="text-xs text-spot mt-1">{notif.percent_full}% Sold Out | {notif.velocity_seats} seats booked in 48h</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xs text-haze uppercase mb-1">Current Price</p>
+                        <p className="text-lg text-paper line-through opacity-70">₹{notif.current_price}</p>
+                      </div>
+                    </div>
+                    
+                    <div className="bg-spot/10 border border-spot/20 rounded-lg p-3 my-3">
+                      <p className="text-xs text-paper mb-1 font-semibold uppercase tracking-wider text-spot">AI Suggestion</p>
+                      <p className="text-2xl font-semibold text-paper mb-2">₹{notif.suggested_price}</p>
+                      <p className="text-xs text-haze italic">"{notif.justification}"</p>
+                    </div>
+                    
+                    <div className="flex gap-2 justify-end mt-4">
+                      <button onClick={() => handleResolvePricingNotification(notif.id, 'dismiss')} className="btn-paper text-xs px-4 py-2 bg-white/5 hover:bg-white/10">
+                        Dismiss
+                      </button>
+                      <button onClick={() => handleResolvePricingNotification(notif.id, 'approve', notif.suggested_price)} className="btn-spot text-xs px-4 py-2">
+                        Approve Increase to ₹{notif.suggested_price}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Payout Details Section */}
           <div className="bg-stage/20 border border-white/[0.04] rounded-2xl p-6">
