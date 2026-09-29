@@ -172,7 +172,9 @@ async def buy_resale_ticket(payload: VerifyResalePaymentRequest, current_user: d
             {
                 "p_listing_id": payload.listing_id,
                 "p_buyer_id": buyer_id,
-                "p_new_booking_id": payload.booking_id
+                "p_new_booking_id": payload.booking_id,
+                "p_razorpay_order_id": payload.razorpay_order_id,
+                "p_razorpay_payment_id": payload.razorpay_payment_id
             }
         ).execute()
         

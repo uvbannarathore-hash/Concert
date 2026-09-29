@@ -24,6 +24,8 @@ class UpdateProfileRequest(BaseModel):
     city: str | None = None
     address: str | None = None
     payout_upi_id: str | None = None
+    payout_bank_account: str | None = None
+    payout_ifsc: str | None = None
 
 
 class LoginRequest(BaseModel):
@@ -144,19 +146,49 @@ def update_my_profile(payload: UpdateProfileRequest, current_user: dict = Depend
 def login(request: Request, payload: LoginRequest):
     """
     Logs in an existing user and returns a Supabase access token.
-    The frontend stores this token and sends it as:
-        Authorization: Bearer <access_token>
-    on every subsequent request.
+    Implements Botnet brute-force protection (lockout).
     """
+    client_ip = request.client.host if request.client else "unknown"
+    
+    from datetime import datetime, timedelta, timezone
+    thirty_mins_ago = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+    
+    recent_fails = supabase_admin.table("failed_logins") \
+        .select("ip_address") \
+        .eq("email", payload.email) \
+        .gte("attempt_time", thirty_mins_ago) \
+        .execute()
+        
+    failed_ips = {row["ip_address"] for row in (recent_fails.data or [])}
+    total_fails = len(recent_fails.data or [])
+    
+    if total_fails >= 5 and len(failed_ips) >= 2:
+        # We use a generic message to prevent email enumeration
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
     try:
         result = supabase_anon.auth.sign_in_with_password(
             {"email": payload.email, "password": payload.password}
         )
     except Exception:
+        # 2. Log the failed attempt
+        supabase_admin.table("failed_logins").insert({
+            "email": payload.email,
+            "ip_address": client_ip
+        }).execute()
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     if not result.session:
+        # Log the failed attempt just in case
+        supabase_admin.table("failed_logins").insert({
+            "email": payload.email,
+            "ip_address": client_ip
+        }).execute()
         raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    # 3. Successful login - clear the failed attempts for this email
+    # This prevents the user from accidentally locking themselves out later if they had some old failed attempts.
+    supabase_admin.table("failed_logins").delete().eq("email", payload.email).execute()
 
     return {
         "access_token": result.session.access_token,

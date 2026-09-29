@@ -13,8 +13,10 @@ almost verbatim, since those were already tuned through real usage.
 
 import json
 import logging
+import threading
 from app.supabase_client import supabase_admin, supabase_anon
 from datetime import datetime
+from app.services.insider_notifier import trigger_insider_notifications
 from google import genai
 from google.genai import types
 from app.config import GEMINI_API_KEY
@@ -248,6 +250,10 @@ def create_event1(
         vector = embedding_service.generate_event_embedding(event_dict)
         if vector:
             supabase_admin.table("events").update({"embedding": vector}).eq("event_id", event_id).execute()
+            
+        # Fire off insider notifications in the background
+        threading.Thread(target=trigger_insider_notifications, args=(event_id,)).start()
+        
     except Exception as e:
         logger.error(f"Failed to generate embedding after event creation for {event_id}: {e}")
 

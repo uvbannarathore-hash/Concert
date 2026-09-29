@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { QRCodeSVG } from 'qrcode.react'
-import { api, getPublicPassUrl } from '../lib/api'
+import { api, getPublicPassUrl, getPageSessionId } from '../lib/api'
 import { MapPin, CheckCircle2 } from 'lucide-react'
 import DigitalPassModal from '../components/DigitalPassModal'
 import ReviewList from '../components/ReviewList'
@@ -135,6 +135,14 @@ export default function ConcertDetailPage() {
         } catch (e) {
           console.warn('Could not save to recently viewed events', e)
         }
+
+        // Track page view for Organizer Analytics
+        if (data.event && data.event.event_id) {
+          api.trackPageView({
+            event_id: data.event.event_id,
+            session_id: getPageSessionId()
+          }).catch(e => console.warn('Tracking failed:', e.message))
+        }
       })
       .catch((err) => setError(err.message))
 
@@ -161,6 +169,56 @@ export default function ConcertDetailPage() {
        .then((data) => setResaleTickets(data.results || []))
        .catch(() => {})
   }, [eventId])
+
+  useEffect(() => {
+    if (!event) return
+
+    // Clean up function to remove injected scripts if the component unmounts or event changes
+    const injectedElements = []
+
+    if (event.ga_tracking_id) {
+      const script1 = document.createElement('script')
+      script1.async = true
+      script1.src = `https://www.googletagmanager.com/gtag/js?id=${event.ga_tracking_id}`
+      document.head.appendChild(script1)
+      
+      const script2 = document.createElement('script')
+      script2.innerHTML = `
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+        gtag('config', '${event.ga_tracking_id}');
+      `
+      document.head.appendChild(script2)
+      injectedElements.push(script1, script2)
+    }
+
+    if (event.pixel_tracking_id) {
+      const script = document.createElement('script')
+      script.innerHTML = `
+        !function(f,b,e,v,n,t,s)
+        {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+        n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+        if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+        n.queue=[];t=b.createElement(e);t.async=!0;
+        t.src=v;s=b.getElementsByTagName(e)[0];
+        s.parentNode.insertBefore(t,s)}(window, document,'script',
+        'https://connect.facebook.net/en_US/fbevents.js');
+        fbq('init', '${event.pixel_tracking_id}');
+        fbq('track', 'PageView');
+      `
+      document.head.appendChild(script)
+      injectedElements.push(script)
+    }
+
+    return () => {
+      injectedElements.forEach(el => {
+        if (document.head.contains(el)) {
+          document.head.removeChild(el)
+        }
+      })
+    }
+  }, [event])
 
   const hasSeatMap = seatMap?.has_seat_map === true
 

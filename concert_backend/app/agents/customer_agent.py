@@ -301,6 +301,7 @@ ALWAYS use this tool for such questions - never answer from conversation memory.
 Use ONLY when the user explicitly confirms a booking after the assistant has shown the booking summary.
 Examples: "Yes, proceed", "Confirm", "Book it", "Proceed with booking"
 Before calling book_ticket_transaction, you MUST have: event_id, artist/event, date, venue, ticket category, quantity, price.
+STRICT CATEGORY RULE: You must ONLY book the exact category the user requested (e.g., if they ask for "2 General tickets", book ONLY 2 General tickets). NEVER generate payment links or bookings for other categories like VIP or Royal unless explicitly asked. Call the tool EXACTLY ONCE for the requested category.
 For events where get_available_seats returned has_seat_map=true, ask which specific seats the user wants and pass them as seat_numbers (e.g. ["N5", "N6"]) instead of a plain count - or if they say "any 2 seats"/don't care which, pass seats as a count instead and the system auto-picks available ones. For events with has_seat_map=false, always just pass seats as a count.
 NEVER claim that a booking was successful unless book_ticket_transaction actually succeeds.
 After book_ticket_transaction succeeds, provide the booking confirmation and clearly state the booking is reserved/pending until payment is completed via the payment_link - never say it is fully confirmed.

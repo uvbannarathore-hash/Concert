@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
-import { User, LogOut, ShieldCheck, Search, X, ChevronDown, Menu } from 'lucide-react'
+import { User, LogOut, ShieldCheck, Search, X, ChevronDown, Menu, LayoutDashboard } from 'lucide-react'
 
 export default function NavBar() {
   const navigate = useNavigate()
@@ -148,6 +148,16 @@ export default function NavBar() {
                     <User className="w-4 h-4 text-paper" />
                     <span>Profile</span>
                   </Link>
+                  {profile?.is_organizer && (
+                    <Link 
+                      to="/organizer/dashboard" 
+                      onClick={() => setDropdownOpen(false)}
+                      className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-paper hover:bg-stage2/60 transition duration-200"
+                    >
+                      <LayoutDashboard className="w-4 h-4 text-paper" />
+                      <span>Organizer Dashboard</span>
+                    </Link>
+                  )}
                   <button 
                     onClick={handleLogout}
                     className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-spot hover:bg-spot/10 text-left transition duration-200"
@@ -212,6 +222,11 @@ export default function NavBar() {
               <Link to="/profile" className="flex items-center gap-2 text-base font-medium text-paper py-1 border-b border-white/[0.02]">
                 <User className="w-4 h-4" /> Profile ({firstName})
               </Link>
+              {profile?.is_organizer && (
+                <Link to="/organizer/dashboard" className="flex items-center gap-2 text-base font-medium text-paper py-1 border-b border-white/[0.02]">
+                  <LayoutDashboard className="w-4 h-4" /> Organizer Dashboard
+                </Link>
+              )}
               {profile?.is_admin && (
                 <Link to="/admin" className="flex items-center gap-2 text-base font-medium text-spot2 py-1 border-b border-white/[0.02]">
                   <ShieldCheck className="w-4 h-4" /> Admin Backend

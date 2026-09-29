@@ -640,9 +640,26 @@ def verify_payment(payload: VerifyPaymentRequest, current_user: dict = Depends(g
     # shows as refunded - the exact class of bug fixed in the cancellation
     # flow, just reachable from this endpoint too.
     if booking_row["status"] == "Cancelled":
+        # M11 FIX: Auto-refund late/stray checkout payments on expired bookings
+        logger.error(f"Received late checkout payment for cancelled booking {booking_row['booking_id']}. Refunding.")
+        try:
+            payment_info, refunds_list = _fetch_payment_and_refunds(payload.razorpay_payment_id)
+            captured_amount = payment_info.get("amount") or 0
+            recon = _reconcile_refund_state(payment_info, refunds_list, captured_amount)
+            if recon["remaining_refundable_amount"] > 0:
+                razorpay_client.payment.refund(
+                    payload.razorpay_payment_id,
+                    {
+                        "amount": recon["remaining_refundable_amount"],
+                        "notes": {"booking_id": booking_row["booking_id"], "reason": "checkout_completed_after_cancellation"},
+                    },
+                )
+        except Exception as refund_err:
+            logger.error(f"Refund attempt failed for late checkout on booking {booking_row['booking_id']}: {refund_err}")
+            
         raise HTTPException(
             status_code=409,
-            detail=f"This booking was already cancelled. Payment status: {booking_row.get('payment_status')}",
+            detail=f"This booking was already cancelled. Your payment has been refunded.",
         )
         
     # Attempt to consume coupon atomically if one was used
@@ -828,6 +845,28 @@ async def razorpay_webhook(request: Request):
         )
         if booking.data:
             booking_row = booking.data[0]
+
+            # Critical check: if booking was already cancelled (e.g. by stale pending bookings cron)
+            # DO NOT confirm it. Instead, automatically refund the user.
+            if booking_row["status"] == "Cancelled":
+                logger.error(f"Received late payment for cancelled booking {booking_row['booking_id']}. Refunding.")
+                try:
+                    payment_info, refunds_list = _fetch_payment_and_refunds(razorpay_payment_id)
+                    captured_amount = payment_info.get("amount") or 0
+                    recon = _reconcile_refund_state(payment_info, refunds_list, captured_amount)
+                    if recon["remaining_refundable_amount"] > 0:
+                        razorpay_client.payment.refund(
+                            razorpay_payment_id,
+                            {
+                                "amount": recon["remaining_refundable_amount"],
+                                "notes": {"booking_id": booking_row["booking_id"], "reason": "booking_cancelled_prior_to_payment"},
+                            },
+                        )
+                except Exception as refund_err:
+                    logger.error(f"Refund attempt failed for late payment on booking {booking_row['booking_id']}: {refund_err}")
+                
+                # We still return 200 OK so Razorpay stops retrying the webhook
+                return {"status": "ok"}
 
             # Calculate amount (price * seats) – used for both payments and bookings total_amount
             ticket_row = _get_ticket_or_404(booking_row["event_id"], booking_row["category"])

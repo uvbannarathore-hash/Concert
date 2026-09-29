@@ -56,3 +56,22 @@ async def get_current_user(authorization: str = Header(...)) -> dict:
         "name": name,
         "is_admin": is_admin,
     }
+
+async def get_current_user_optional(authorization: str = Header(None)) -> dict | None:
+    """
+    Like get_current_user, but returns None if no header is provided or if the token is invalid.
+    Useful for routes where login is optional.
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    try:
+        token = authorization.replace("Bearer ", "").strip()
+        user_response = supabase_admin.auth.get_user(token)
+        if user_response and user_response.user:
+            return {
+                "user_id": str(user_response.user.id),
+                "email": user_response.user.email
+            }
+    except Exception:
+        pass
+    return None

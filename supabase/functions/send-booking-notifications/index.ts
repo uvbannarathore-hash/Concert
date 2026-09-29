@@ -147,7 +147,7 @@ serve(async (req) => {
       const eligibleAmount = details.eligible_amount || 0;
       const cancellationFee = details.cancellation_fee_percentage || 0;
       const refundPercentage = details.refund_percentage || 0;
-      const refundAmount = details.refund_amount || 0;
+      const refundAmount = details.actual_refunded_amount || details.requested_refund_amount || 0;
       const refundStatus = record.payment_status;
 
       subject = "Your booking has been cancelled";

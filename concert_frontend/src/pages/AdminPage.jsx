@@ -50,6 +50,7 @@ export default function AdminPage() {
   const [seatEventId, setSeatEventId] = useState('')
   const [seatRowForm, setSeatRowForm] = useState({ category: '', seat_row: '', seat_count: '', start_number: '1' })
   const [seatLayout, setSeatLayout] = useState([])
+  const [seatSummary, setSeatSummary] = useState([])
   const [seatLayoutLoading, setSeatLayoutLoading] = useState(false)
 
   const [showPastEvents, setShowPastEvents] = useState(false)
@@ -484,7 +485,10 @@ export default function AdminPage() {
     setSeatLayoutLoading(true)
     adminApi
       .getSeatLayout(seatEventId.trim())
-      .then((data) => setSeatLayout(data.seats || []))
+      .then((data) => {
+        setSeatLayout(data.seats || [])
+        setSeatSummary(data.summary || [])
+      })
       .catch((err) => setError(err.message))
       .finally(() => setSeatLayoutLoading(false))
   }
@@ -1179,6 +1183,30 @@ export default function AdminPage() {
                     </div>
                     <button type="submit" className="btn-spot text-xs h-[38px]">+ Add Row</button>
                   </form>
+
+                  {seatSummary && seatSummary.length > 0 && (
+                    <div className="bg-stage/20 border border-white/[0.04] rounded-xl p-4">
+                      <h3 className="text-[10px] uppercase tracking-widest text-haze/60 mb-3">Category Completeness Status</h3>
+                      <div className="space-y-2">
+                        {seatSummary.map(s => (
+                          <div key={s.category} className="flex justify-between items-center text-xs font-mono pb-2 border-b border-white/[0.02] last:border-0 last:pb-0">
+                            <span className="text-paper">{s.category}</span>
+                            <div className="text-right">
+                              <span className={s.is_complete ? 'text-go' : 'text-spot2'}>
+                                {s.seats_in_seat_map} / {s.total_seats_configured} seats configured
+                              </span>
+                              {!s.is_complete && (
+                                <span className="text-spot opacity-80 ml-2">({s.seats_missing} missing)</span>
+                              )}
+                              {s.is_complete && (
+                                <span className="text-go opacity-80 ml-2">(Complete)</span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   <div className="space-y-2">
                     {seatLayoutLoading && <p className="text-xs font-mono text-haze">Loading…</p>}

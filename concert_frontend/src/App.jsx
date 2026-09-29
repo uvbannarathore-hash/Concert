@@ -17,7 +17,9 @@ import VenueProfilePage from './pages/VenueProfilePage'
 import PricingPage from './pages/PricingPage'
 import GroupInvitePage from './pages/GroupInvitePage'
 import GroupJoinPage from './pages/GroupJoinPage'
+import OrganizerDashboard from './pages/OrganizerDashboard'
 import ChatWidget from './components/ChatWidget'
+import LiveWireInsider from './components/LiveWireInsider'
 import { api } from './lib/api'
 
 
@@ -90,8 +92,17 @@ export default function App() {
               </RequireAuth>
             }
           />
+          <Route
+            path="/organizer/dashboard"
+            element={
+              <RequireAuth>
+                <OrganizerDashboard />
+              </RequireAuth>
+            }
+          />
         </Routes>
       </div>
+      <LiveWireInsider />
       <ChatWidget />
     </div>
   )

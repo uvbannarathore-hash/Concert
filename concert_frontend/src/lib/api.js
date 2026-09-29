@@ -54,6 +54,15 @@ export function getSessionId() {
   return sid
 }
 
+export function getPageSessionId() {
+  let psid = sessionStorage.getItem('page_view_session_id')
+  if (!psid) {
+    psid = crypto.randomUUID()
+    sessionStorage.setItem('page_view_session_id', psid)
+  }
+  return psid
+}
+
 // Attempts a silent token refresh using the stored refresh_token.
 // Returns true if the new access_token was saved, false if refresh failed
 // (token expired/revoked) — in which case the session is cleared so the
@@ -97,7 +106,7 @@ async function tryRefreshToken() {
   }
 }
 
-async function request(path, { method = 'GET', body, auth = false, _retried = false, signal } = {}) {
+async function request(path, { method = 'GET', body, auth = false, rawText = false, _retried = false, signal } = {}) {
   const headers = { 
     'Content-Type': 'application/json',
     'Bypass-Tunnel-Reminder': 'true',
@@ -124,6 +133,17 @@ async function request(path, { method = 'GET', body, auth = false, _retried = fa
     if (refreshed) return request(path, { method, body, auth, _retried: true, signal })
     // Refresh failed — session is cleared, surface a clean error.
     throw new Error('Session expired. Please log in again.')
+  }
+
+  if (rawText) {
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}))
+      const message = errData.detail
+        ? (typeof errData.detail === 'string' ? errData.detail : JSON.stringify(errData.detail))
+        : `Request failed (${res.status})`
+      throw new Error(message)
+    }
+    return res.text()
   }
 
   const data = await res.json().catch(() => ({}))
@@ -238,10 +258,10 @@ export const api = {
   myProfile: () => request('/auth/me', { auth: true }),
 
   // Lets a logged-in user update their name/phone/city/address at any time
-  // (e.g. from an Edit Profile page). Only pass the fields you want changed -
-  // omit or pass undefined for anything that should stay the same.
-  updateProfile: ({ name, phone, city, address } = {}) =>
-    request('/auth/me', { method: 'PATCH', auth: true, body: { name, phone, city, address } }),
+  // (e.g. from an Edit Profile page or Organizer Dashboard). Only pass the fields 
+  // you want changed - omit or pass undefined for anything that should stay the same.
+  updateProfile: ({ name, phone, city, address, payout_upi_id, payout_bank_account, payout_ifsc } = {}) =>
+    request('/auth/me', { method: 'PATCH', auth: true, body: { name, phone, city, address, payout_upi_id, payout_bank_account, payout_ifsc } }),
 
   getWishlist: () => request('/wishlist', { auth: true }),
   
@@ -414,11 +434,21 @@ export const api = {
   upgradePlan: (plan_tier) => request('/organizer/plan/upgrade', { method: 'POST', body: { plan_tier }, auth: true }),
   verifyPlanUpgrade: (payload) => request('/organizer/plan/upgrade/verify', { method: 'POST', body: payload, auth: true }),
   updatePayoutDetails: (payload) => request('/organizer/payout-details', { method: 'PATCH', body: payload, auth: true }),
+  cancelOrganizerEvent: (eventId) => request(`/organizer/events/${eventId}/cancel`, { method: 'POST', auth: true }),
 
   // --- LiveWire Plus Membership ---
   getMembershipStatus: () => request('/membership/status', { auth: true }),
   subscribePlus: (plan_type) => request('/membership/subscribe', { method: 'POST', body: { plan_type }, auth: true }),
   verifyPlusSubscription: (payload) => request('/membership/subscribe/verify', { method: 'POST', body: payload, auth: true }),
+
+  subscribeInsider: (payload) => request('/insider/subscribe', { method: 'POST', body: payload, auth: true }),
+  
+  // --- Organizer ---
+  getOrganizerEvents: () => request('/organizer/events', { auth: true }),
+  updateTrackingIds: (eventId, payload) => request(`/organizer/analytics/events/${eventId}/tracking`, { method: 'PATCH', body: payload, auth: true }),
+  trackPageView: (payload) => request('/organizer/analytics/track-view', { method: 'POST', body: payload }),
+  exportAttendeesCsv: (eventId) => request(`/organizer/analytics/events/${eventId}/export-attendees`, { auth: true, rawText: true }),
+  getEventStats: (eventId) => request(`/organizer/analytics/events/${eventId}/stats`, { auth: true }),
 }
 
 

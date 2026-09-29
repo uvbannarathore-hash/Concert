@@ -597,8 +597,16 @@ def initiate_cancellation(booking_id: str, user_id: str) -> dict:
         if ledger_check.data:
             ledger = ledger_check.data[0]
             payout_status = ledger.get("payout_status")
-            
-            supabase_admin.table("booking_ledger").update({"payout_status": "refunded", "updated_at": "now()"}).eq("booking_id", booking_id).execute()
+            # Double-entry accounting fields
+            cancellation_fee_retained = round(eligibility["eligible_amount"] - (actual_refunded_amount_paise / 100.0), 2)
+            platform_refund_deduction = float(ledger.get("platform_net", 0))
+
+            supabase_admin.table("booking_ledger").update({
+                "payout_status": "refunded", 
+                "updated_at": "now()",
+                "cancellation_fee_retained": cancellation_fee_retained,
+                "platform_refund_deduction": platform_refund_deduction
+            }).eq("booking_id", booking_id).execute()
             
             if payout_status == "paid":
                 org_res = supabase_admin.table("events").select("organizer_id").eq("event_id", booking["event_id"]).execute()

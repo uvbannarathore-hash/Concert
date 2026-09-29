@@ -36,6 +36,8 @@ export default function ListYourShowPage() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [successMsg, setSuccessMsg] = useState('')
+  const [cancelError, setCancelError] = useState('')
+  const [cancelSuccessMsg, setCancelSuccessMsg] = useState('')
 
   const [showLocationPicker, setShowLocationPicker] = useState(false)
   const [venueLocation, setVenueLocation] = useState(null)
@@ -212,6 +214,22 @@ export default function ListYourShowPage() {
     }
   }
 
+  async function handleCancelEvent(eventId) {
+    if (!confirm("WARNING: Are you sure you want to cancel this event? This will trigger a 100% refund to all users and you will be charged a 5% cancellation penalty to cover gateway fees. This action CANNOT be undone.")) {
+      return
+    }
+    
+    setCancelError('')
+    setCancelSuccessMsg('')
+    try {
+      await api.cancelOrganizerEvent(eventId)
+      setCancelSuccessMsg("Event successfully cancelled. All users have been refunded.")
+      loadInitialData()
+    } catch (err) {
+      setCancelError(err.message || "Failed to cancel event.")
+    }
+  }
+
   return (
     <div className="max-w-3xl mx-auto px-6 py-12 animate-fade-in-up">
       <div className="mb-10">
@@ -295,69 +313,7 @@ export default function ListYourShowPage() {
             </div>
           )}
 
-          {/* Payout Details Section */}
-          <div className="bg-stage/20 border border-white/[0.04] rounded-2xl p-6">
-            <h2 className="font-display text-2xl uppercase tracking-wide text-paper mb-4">Payout Details</h2>
-            {payouts?.payout_destination_missing && (
-              <div className="mb-4 text-xs font-mono text-spot bg-spot/5 border border-spot/20 p-3 rounded-lg">
-                ⚠️ You have pending payouts, but no payout destination is set. Please add a UPI ID or Bank Details below to receive your balance.
-              </div>
-            )}
-            <form onSubmit={handleSavePayoutDetails} className="space-y-4 max-w-md">
-              <div>
-                <label className="text-[10px] uppercase tracking-wider text-haze/60 block mb-1">UPI ID (Preferred)</label>
-                <input
-                  value={payoutForm.upi_id}
-                  onChange={(e) => setPayoutForm(f => ({ ...f, upi_id: e.target.value }))}
-                  placeholder="e.g. name@bank"
-                  className="w-full bg-void border border-white/[0.06] rounded-lg px-3 py-2 text-sm text-paper focus:outline-none focus:border-spot/40"
-                />
-              </div>
-              <p className="text-xs text-haze font-mono text-center">— OR —</p>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-[10px] uppercase tracking-wider text-haze/60 block mb-1">Bank Account</label>
-                  <input
-                    value={payoutForm.bank_account}
-                    onChange={(e) => setPayoutForm(f => ({ ...f, bank_account: e.target.value }))}
-                    className="w-full bg-void border border-white/[0.06] rounded-lg px-3 py-2 text-sm text-paper focus:outline-none focus:border-spot/40"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] uppercase tracking-wider text-haze/60 block mb-1">IFSC Code</label>
-                  <input
-                    value={payoutForm.ifsc}
-                    onChange={(e) => setPayoutForm(f => ({ ...f, ifsc: e.target.value }))}
-                    className="w-full bg-void border border-white/[0.06] rounded-lg px-3 py-2 text-sm text-paper focus:outline-none focus:border-spot/40"
-                  />
-                </div>
-              </div>
-              <button type="submit" disabled={payoutSaving} className="btn-spot text-xs mt-2">
-                {payoutSaving ? 'Saving...' : 'Save Payout Details'}
-              </button>
-            </form>
-          </div>
 
-          {/* Payout Balance */}
-          {payouts && (
-            <div>
-              <h2 className="font-display text-2xl uppercase tracking-wide text-paper mb-4">Payout Balance</h2>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="bg-stage/20 border border-white/[0.04] rounded-xl p-4 flex flex-col justify-center">
-                  <p className="text-xs text-haze uppercase tracking-widest mb-1">Pending Payouts</p>
-                  <p className="text-2xl text-paper font-semibold">₹{(payouts.total_pending_payout || 0).toLocaleString()}</p>
-                </div>
-                <div className="bg-stage/20 border border-white/[0.04] rounded-xl p-4 flex flex-col justify-center">
-                  <p className="text-xs text-haze uppercase tracking-widest mb-1">Clawbacks</p>
-                  <p className="text-2xl text-spot font-semibold">₹{(Math.abs(payouts.total_clawbacks) || 0).toLocaleString()}</p>
-                </div>
-                <div className="bg-stage/20 border border-white/[0.04] rounded-xl p-4 flex flex-col justify-center border-l-4 border-l-go/50">
-                  <p className="text-xs text-haze uppercase tracking-widest mb-1">Net Payable</p>
-                  <p className="text-2xl text-go font-semibold">₹{(payouts.net_payable || 0).toLocaleString()}</p>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       ) : (
         profile && (
@@ -598,6 +554,18 @@ export default function ListYourShowPage() {
 
       <div>
         <h2 className="font-display text-2xl uppercase tracking-wide text-paper mb-4">Your Submissions</h2>
+        
+        {cancelError && (
+          <div className="border border-spot/20 bg-spot/5 text-spot text-xs font-mono rounded-xl p-4 mb-4">
+            ⚠️ {cancelError}
+          </div>
+        )}
+        {cancelSuccessMsg && (
+          <div className="border border-go/20 bg-go/5 text-go text-xs font-mono rounded-xl p-4 mb-4">
+            ✅ {cancelSuccessMsg}
+          </div>
+        )}
+
         {loadingSubmissions && <p className="text-xs text-haze">Loading…</p>}
         {!loadingSubmissions && submissions.length === 0 && (
           <p className="text-xs text-haze">You haven't submitted any shows yet.</p>
@@ -612,9 +580,19 @@ export default function ListYourShowPage() {
                   <p className="text-[11px] text-spot mt-1">Reason: {s.rejection_reason}</p>
                 )}
               </div>
-              <span className={`text-[10px] font-mono uppercase px-2.5 py-1 rounded-md border ${statusStyles[s.status] || ''}`}>
-                {s.status}
-              </span>
+              <div className="flex items-center gap-3">
+                {s.status === 'Approved' && s.created_event_id && (
+                  <button
+                    onClick={() => handleCancelEvent(s.created_event_id)}
+                    className="text-[10px] text-spot hover:text-[#ff5c84] uppercase tracking-wider font-semibold px-3 py-1.5 border border-spot/30 hover:border-spot rounded-md transition"
+                  >
+                    Cancel Event
+                  </button>
+                )}
+                <span className={`text-[10px] font-mono uppercase px-2.5 py-1 rounded-md border ${statusStyles[s.status] || ''}`}>
+                  {s.status}
+                </span>
+              </div>
             </div>
           ))}
         </div>
